@@ -1,5 +1,7 @@
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# AWGStat — system crontab (/etc/cron.d/awgstat), not user crontab
 * * * * * root /opt/wgstats/wgstats.sh >/dev/null 2>&1
 */5 * * * * root /usr/bin/python3 /opt/wgstats/htmlgen.py >/dev/null 2>&1
+# Daily backup check at 03:00 — backup.sh no-ops until BACKUP_DAYS elapsed
 0 3 * * * root /opt/wgstats/backup.sh >/dev/null 2>&1

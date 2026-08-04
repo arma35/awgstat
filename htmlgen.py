@@ -145,7 +145,10 @@ def clean_ip(ip: str) -> str:
 
 
 def names_map_changed(names_path: Path, index_path: Path) -> bool:
-    """Rebuild HTML when names.map is newer than the published page."""
+    """Rebuild HTML when names.map is newer than the published page.
+
+    Exception to the 'no traffic → no page' rule: renames/swaps must redraw.
+    """
     if not names_path.exists():
         return False
     if not index_path.exists():

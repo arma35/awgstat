@@ -71,6 +71,8 @@ mkdir -p "${WEBROOT}"
 install -m 0644 "${SRC}/style.css" "${WEBROOT}/style.css"
 
 install -m 0644 "${SRC}/cron/awgstat" "${CRON_DST}"
+# cron.d requires trailing newline and root-owned 644
+chmod 644 "${CRON_DST}"
 
 # Force HTML rebuild after upgrade
 touch "${DEST}/.changed"
@@ -79,5 +81,7 @@ python3 "${DEST}/htmlgen.py" || true
 echo "Done. AWGStat ${VERSION}"
 echo "  code:    ${DEST}"
 echo "  webroot: ${WEBROOT}"
-echo "  cron:    ${CRON_DST}"
+echo "  cron:    ${CRON_DST}  (not visible in crontab -l — use: cat ${CRON_DST})"
 echo "  preserved: names.map history.csv last.db backups/ config(local keys)"
+echo "--- cron jobs ---"
+cat "${CRON_DST}"

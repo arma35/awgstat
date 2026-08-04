@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1] — 2026-08-04
+
+### Fixed
+- names.map edits schedule HTML rebuild within ~1 minute (stamp + `.changed`), even with no new traffic
+- `install.sh` prints full `/etc/cron.d/awgstat` (backup job is there; not shown by `crontab -l`)
+- Clearer comments in cron file for the 03:00 backup line
+
 ## [1.1.0] — 2026-08-04
 
 ### Added

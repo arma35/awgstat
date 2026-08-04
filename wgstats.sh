@@ -32,6 +32,22 @@ die() {
 exec 9>"${LOCK_FILE}"
 flock -n 9 || exit 0
 
+# If names.map was edited (no traffic needed), ask htmlgen to redraw
+mark_names_changed() {
+    local stamp="${WORKDIR}/.names_mtime"
+    [[ -f "${NAMES}" ]] || return 0
+    local cur prev
+    cur="$(stat -c '%Y' "${NAMES}" 2>/dev/null || stat -f '%m' "${NAMES}" 2>/dev/null || echo 0)"
+    prev=0
+    [[ -f "${stamp}" ]] && prev="$(tr -d '[:space:]' <"${stamp}" || true)"
+    [[ "${prev}" =~ ^[0-9]+$ ]] || prev=0
+    if (( cur > prev )); then
+        printf '%s\n' "${cur}" >"${stamp}"
+        touch "${CHANGED}"
+        log "names.map changed → schedule HTML rebuild"
+    fi
+}
+
 load_names() {
     declare -gA PEER_NAMES=()
     [[ -f "${NAMES}" ]] || return 0
@@ -163,6 +179,7 @@ get_dump() {
 }
 
 load_names
+mark_names_changed
 init_history
 read_lastdb
 
