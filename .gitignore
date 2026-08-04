@@ -1,10 +1,12 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 .changed
 .lock
+.last_backup
 history.csv
 last.db
 logs/
+backups/
 names.map
 config.local
 

@@ -16,6 +16,7 @@ LOG_FILE="${LOG_DIR}/wgstats.log"
 LOCK_FILE="${WORKDIR}/.lock"
 CSV_VERSION="#WGSTAT:1"
 CSV_HEADER="timestamp;date;time;peer;name;ip;rx_bytes;tx_bytes;interval;handshake"
+UNKNOWN_LABEL="неизвестный"
 
 mkdir -p "${LOG_DIR}"
 
@@ -55,6 +56,39 @@ peer_name() {
     else
         echo ""
     fi
+}
+
+# Ensure peer exists in names.map; invent "неизвестный" / "неизвестный-N"
+ensure_peer_name() {
+    local peer="$1"
+    local existing
+    existing="$(peer_name "${peer}")"
+    if [[ -n "${existing}" ]]; then
+        echo "${existing}"
+        return 0
+    fi
+
+    local label="${UNKNOWN_LABEL}"
+    local n=1
+    local used
+    while true; do
+        used=0
+        for k in "${!PEER_NAMES[@]}"; do
+            if [[ "${PEER_NAMES[${k}]}" == "${label}" ]]; then
+                used=1
+                break
+            fi
+        done
+        (( used == 0 )) && break
+        n=$((n + 1))
+        label="${UNKNOWN_LABEL}-${n}"
+    done
+
+    touch "${NAMES}"
+    printf '%s=%s\n' "${peer}" "${label}" >>"${NAMES}"
+    PEER_NAMES["${peer}"]="${label}"
+    log "names.map: added ${peer} → ${label}"
+    echo "${label}"
 }
 
 init_history() {
@@ -172,7 +206,8 @@ while IFS=$'\t' read -r peer _psk _endpoint allowed_ips handshake rx tx _keepali
         continue
     fi
 
-    name="$(peer_name "${peer}")"
+    # Traffic seen — ensure names.map has an entry (auto "неизвестный")
+    name="$(ensure_peer_name "${peer}")"
     printf '%s;%s;%s;%s;%s;%s;%s;%s;%s;%s\n' \
         "${NOW}" "${DATE}" "${TIME}" "${peer}" "${name}" \
         "${allowed_ips:-}" "${drx}" "${dtx}" "${interval}" "${handshake}" >>"${tmp_history}"

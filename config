@@ -2,7 +2,7 @@
 # AWGStat configuration
 ########################################
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # Docker container with AmneziaWG
 CONTAINER="amnezia-awg2"
@@ -24,6 +24,11 @@ WEBROOT="/var/www/html-20180/wgstats"
 
 # History retention
 RETENTION_DAYS=365
+
+# Backup period in days (backup.sh / cron at 03:00)
+BACKUP_DAYS=7
+BACKUP_DIR="${WORKDIR}/backups"
+LAST_BACKUP="${WORKDIR}/.last_backup"
 
 # Page title
 TITLE="AWGStat"

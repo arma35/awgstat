@@ -2,3 +2,4 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 * * * * * root /opt/wgstats/wgstats.sh >/dev/null 2>&1
 */5 * * * * root /usr/bin/python3 /opt/wgstats/htmlgen.py >/dev/null 2>&1
+0 3 * * * root /opt/wgstats/backup.sh >/dev/null 2>&1

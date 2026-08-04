@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AWGStat HTML generator — rebuilds the report only when data changed."""
+"""AWGStat HTML generator — rebuilds when traffic or names.map changed."""
 
 from __future__ import annotations
 
@@ -124,6 +124,7 @@ def aggregate(rows: list[dict[str, str]]) -> dict[str, dict[str, object]]:
         peer = row["peer"]
         total = rx + tx
         item = stats[peer]
+        # Historical name kept only as fallback; live names.map wins later
         if row.get("name"):
             item["name"] = row["name"]
         if row.get("ip"):
@@ -141,6 +142,15 @@ def aggregate(rows: list[dict[str, str]]) -> dict[str, dict[str, object]]:
 
 def clean_ip(ip: str) -> str:
     return ip.split("/", 1)[0] if ip else ""
+
+
+def names_map_changed(names_path: Path, index_path: Path) -> bool:
+    """Rebuild HTML when names.map is newer than the published page."""
+    if not names_path.exists():
+        return False
+    if not index_path.exists():
+        return True
+    return names_path.stat().st_mtime > index_path.stat().st_mtime
 
 
 def render_html(
@@ -208,6 +218,7 @@ def main() -> int:
     history = expand(cfg["HISTORY"], cfg)
     names_path = expand(cfg["NAMES"], cfg)
     webroot = Path(cfg["WEBROOT"])
+    index_path = webroot / "index.html"
     title = cfg.get("TITLE", "AWGStat")
     version = read_version(cfg)
     force = "--force" in sys.argv
@@ -215,7 +226,12 @@ def main() -> int:
     if not static_src.exists():
         static_src = SCRIPT_DIR / "style.css"
 
-    if not force and not changed.exists():
+    need_rebuild = (
+        force
+        or changed.exists()
+        or names_map_changed(names_path, index_path)
+    )
+    if not need_rebuild:
         return 0
 
     names = load_names(names_path)
@@ -224,7 +240,8 @@ def main() -> int:
 
     table_rows: list[tuple[str, str, int, int, int, int]] = []
     for peer, item in stats.items():
-        name = str(item["name"] or names.get(peer, ""))
+        # Live names.map always wins over historical CSV name
+        name = names.get(peer) or str(item["name"] or "")
         ip = clean_ip(str(item["ip"]))
         table_rows.append(
             (
@@ -240,9 +257,7 @@ def main() -> int:
     table_rows.sort(key=lambda r: (-r[5], r[0].lower(), r[1]))
 
     webroot.mkdir(parents=True, exist_ok=True)
-    (webroot / "index.html").write_text(
-        render_html(title, version, table_rows), encoding="utf-8"
-    )
+    index_path.write_text(render_html(title, version, table_rows), encoding="utf-8")
 
     if static_src.exists():
         shutil.copy2(static_src, webroot / "style.css")
