@@ -1,0 +1,29 @@
+########################################
+# AWGStat configuration
+########################################
+
+VERSION="1.0.0"
+
+# Docker container with AmneziaWG
+CONTAINER="amnezia-awg2"
+
+# WireGuard interface inside container
+WG_INTERFACE="awg0"
+
+# Project directory on host
+WORKDIR="/opt/wgstats"
+
+# Data files
+HISTORY="${WORKDIR}/history.csv"
+LASTDB="${WORKDIR}/last.db"
+NAMES="${WORKDIR}/names.map"
+CHANGED="${WORKDIR}/.changed"
+
+# Web output (served by your existing web server)
+WEBROOT="/var/www/html-20180/wgstats"
+
+# History retention
+RETENTION_DAYS=365
+
+# Page title
+TITLE="AWGStat"

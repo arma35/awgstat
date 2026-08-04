@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""AWGStat HTML generator — rebuilds the report only when data changed."""
+
+from __future__ import annotations
+
+import html
+import shutil
+import sys
+from collections import defaultdict
+from datetime import datetime, timedelta
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def read_version(cfg: dict[str, str]) -> str:
+    if cfg.get("VERSION"):
+        return cfg["VERSION"]
+    version_file = SCRIPT_DIR / "VERSION"
+    if version_file.exists():
+        return version_file.read_text(encoding="utf-8").strip() or "0.0.0"
+    return "0.0.0"
+
+
+def load_config() -> dict[str, str]:
+    cfg: dict[str, str] = {}
+    config_path = SCRIPT_DIR / "config"
+    if not config_path.exists():
+        sys.exit(f"config not found: {config_path}")
+
+    for raw in config_path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        cfg[key.strip()] = val.strip().strip('"')
+    return cfg
+
+
+def expand(path: str, cfg: dict[str, str]) -> Path:
+    workdir = cfg.get("WORKDIR", "/opt/wgstats")
+    return Path(path.replace("${WORKDIR}", workdir))
+
+
+def fmt_bytes(value: int) -> str:
+    units = ("B", "KB", "MB", "GB", "TB")
+    size = float(max(value, 0))
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} B"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def load_names(path: Path) -> dict[str, str]:
+    names: dict[str, str] = {}
+    if not path.exists():
+        return names
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        names[key.strip()] = val.strip()
+    return names
+
+
+def read_history(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+
+    rows: list[dict[str, str]] = []
+    with path.open(encoding="utf-8", newline="") as fh:
+        for line in fh:
+            if line.startswith("#WGSTAT:"):
+                continue
+            if line.startswith("timestamp;"):
+                continue
+            if not line.strip():
+                continue
+            parts = line.rstrip("\n").split(";")
+            if len(parts) < 10:
+                continue
+            rows.append(
+                {
+                    "timestamp": parts[0],
+                    "peer": parts[3],
+                    "name": parts[4],
+                    "ip": parts[5],
+                    "rx_bytes": parts[6],
+                    "tx_bytes": parts[7],
+                }
+            )
+    return rows
+
+
+def aggregate(rows: list[dict[str, str]]) -> dict[str, dict[str, object]]:
+    now = datetime.now()
+    today_start = datetime(now.year, now.month, now.day)
+    week_start = now - timedelta(days=7)
+    month_start = now - timedelta(days=30)
+
+    stats: dict[str, dict[str, object]] = defaultdict(
+        lambda: {
+            "name": "",
+            "ip": "",
+            "today": 0,
+            "week": 0,
+            "month": 0,
+            "total": 0,
+        }
+    )
+
+    for row in rows:
+        try:
+            ts = datetime.fromtimestamp(int(row["timestamp"]))
+            rx = int(row["rx_bytes"])
+            tx = int(row["tx_bytes"])
+        except (ValueError, KeyError):
+            continue
+
+        peer = row["peer"]
+        total = rx + tx
+        item = stats[peer]
+        if row.get("name"):
+            item["name"] = row["name"]
+        if row.get("ip"):
+            item["ip"] = row["ip"]
+        item["total"] = int(item["total"]) + total
+        if ts >= today_start:
+            item["today"] = int(item["today"]) + total
+        if ts >= week_start:
+            item["week"] = int(item["week"]) + total
+        if ts >= month_start:
+            item["month"] = int(item["month"]) + total
+
+    return stats
+
+
+def clean_ip(ip: str) -> str:
+    return ip.split("/", 1)[0] if ip else ""
+
+
+def render_html(
+    title: str,
+    version: str,
+    rows: list[tuple[str, str, int, int, int, int]],
+) -> str:
+    updated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    body_rows = []
+    for name, ip, today, week, month, total in rows:
+        body_rows.append(
+            "<tr>"
+            f"<td>{html.escape(name or '—')}</td>"
+            f"<td>{html.escape(ip or '—')}</td>"
+            f"<td class=\"num\">{html.escape(fmt_bytes(today))}</td>"
+            f"<td class=\"num\">{html.escape(fmt_bytes(week))}</td>"
+            f"<td class=\"num\">{html.escape(fmt_bytes(month))}</td>"
+            f"<td class=\"num\">{html.escape(fmt_bytes(total))}</td>"
+            "</tr>"
+        )
+
+    rows_html = "\n".join(body_rows) if body_rows else (
+        '<tr><td colspan="6" class="empty">No traffic recorded yet</td></tr>'
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="generator" content="AWGStat {html.escape(version)}">
+  <title>{html.escape(title)}</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>{html.escape(title)} <span class="version">v{html.escape(version)}</span></h1>
+    <p class="updated">Updated: {html.escape(updated)}</p>
+  </header>
+  <main>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>IP</th>
+          <th class="num">Today</th>
+          <th class="num">Week</th>
+          <th class="num">Month</th>
+          <th class="num">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>
+"""
+
+
+def main() -> int:
+    cfg = load_config()
+    changed = expand(cfg["CHANGED"], cfg)
+    history = expand(cfg["HISTORY"], cfg)
+    names_path = expand(cfg["NAMES"], cfg)
+    webroot = Path(cfg["WEBROOT"])
+    title = cfg.get("TITLE", "AWGStat")
+    version = read_version(cfg)
+    force = "--force" in sys.argv
+    static_src = SCRIPT_DIR / "static" / "style.css"
+    if not static_src.exists():
+        static_src = SCRIPT_DIR / "style.css"
+
+    if not force and not changed.exists():
+        return 0
+
+    names = load_names(names_path)
+    rows = read_history(history)
+    stats = aggregate(rows)
+
+    table_rows: list[tuple[str, str, int, int, int, int]] = []
+    for peer, item in stats.items():
+        name = str(item["name"] or names.get(peer, ""))
+        ip = clean_ip(str(item["ip"]))
+        table_rows.append(
+            (
+                name,
+                ip,
+                int(item["today"]),
+                int(item["week"]),
+                int(item["month"]),
+                int(item["total"]),
+            )
+        )
+
+    table_rows.sort(key=lambda r: (-r[5], r[0].lower(), r[1]))
+
+    webroot.mkdir(parents=True, exist_ok=True)
+    (webroot / "index.html").write_text(
+        render_html(title, version, table_rows), encoding="utf-8"
+    )
+
+    if static_src.exists():
+        shutil.copy2(static_src, webroot / "style.css")
+
+    changed.unlink(missing_ok=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

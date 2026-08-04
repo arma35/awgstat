@@ -1,0 +1,10 @@
+﻿__pycache__/
+*.pyc
+.changed
+.lock
+history.csv
+last.db
+logs/
+names.map
+config.local
+
