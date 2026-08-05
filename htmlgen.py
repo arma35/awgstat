@@ -55,6 +55,7 @@ def fmt_bytes(value: int) -> str:
 
 
 def load_names(path: Path) -> dict[str, str]:
+    """Parse peer=name; split on LAST '=' because WG keys are base64 and may end with '='."""
     names: dict[str, str] = {}
     if not path.exists():
         return names
@@ -62,8 +63,18 @@ def load_names(path: Path) -> dict[str, str]:
         line = line.split("#", 1)[0].strip()
         if not line or "=" not in line:
             continue
-        key, val = line.split("=", 1)
-        names[key.strip()] = val.strip()
+        key, val = line.rsplit("=", 1)
+        key, val = key.strip(), val.strip()
+        if val.startswith(":"):
+            val = val[1:]
+        if not key or not val:
+            continue
+        # First real name wins; ignore later auto-unknown spam for the same peer
+        prev = names.get(key)
+        if prev is None:
+            names[key] = val
+        elif prev.startswith("неизвестный") and not val.startswith("неизвестный"):
+            names[key] = val
     return names
 
 

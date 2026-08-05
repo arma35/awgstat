@@ -48,21 +48,66 @@ mark_names_changed() {
     fi
 }
 
+# Base64 WireGuard keys often end with '=' — always split on the LAST '='.
+parse_name_line() {
+    local line="$1"
+    local key val
+    key="${line%=*}"
+    val="${line##*=}"
+    # trim spaces
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    # recover from old bug: value accidentally stored as ":name"
+    if [[ "${val}" == :* ]]; then
+        val="${val:1}"
+    fi
+    printf '%s\t%s\n' "${key}" "${val}"
+}
+
+is_auto_unknown() {
+    [[ "$1" == "${UNKNOWN_LABEL}" || "$1" == "${UNKNOWN_LABEL}-"* ]]
+}
+
 load_names() {
     declare -gA PEER_NAMES=()
     [[ -f "${NAMES}" ]] || return 0
     while IFS= read -r line || [[ -n "${line}" ]]; do
         line="${line%%#*}"
-        line="$(echo "${line}" | xargs)"
-        [[ -z "${line}" ]] && continue
-        if [[ "${line}" == *"="* ]]; then
-            key="${line%%=*}"
-            val="${line#*=}"
-            key="$(echo "${key}" | xargs)"
-            val="$(echo "${val}" | xargs)"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "${line}" || "${line}" != *"="* ]] && continue
+        local key val
+        IFS=$'\t' read -r key val < <(parse_name_line "${line}")
+        [[ -z "${key}" || -z "${val}" ]] && continue
+        # First real name wins; later auto-"неизвестный" spam must not overwrite
+        if [[ -z "${PEER_NAMES[${key}]:-}" ]]; then
+            PEER_NAMES["${key}"]="${val}"
+        elif is_auto_unknown "${PEER_NAMES[${key}]}" && ! is_auto_unknown "${val}"; then
             PEER_NAMES["${key}"]="${val}"
         fi
     done <"${NAMES}"
+}
+
+# Rewrite names.map: one line per peer, drop duplicate junk from the '=' bug
+repair_names_map() {
+    [[ -f "${NAMES}" ]] || return 0
+    local lines total
+    total="$(wc -l <"${NAMES}" | tr -d '[:space:]')"
+    [[ "${total}" =~ ^[0-9]+$ ]] || return 0
+    (( total <= ${#PEER_NAMES[@]} )) && return 0
+
+    local tmp key
+    tmp="$(mktemp)"
+    {
+        for key in "${!PEER_NAMES[@]}"; do
+            printf '%s=%s\n' "${key}" "${PEER_NAMES[${key}]}"
+        done
+    } | LC_ALL=C sort >"${tmp}"
+    mv "${tmp}" "${NAMES}"
+    touch "${CHANGED}"
+    log "names.map: repaired duplicates (${total} lines → ${#PEER_NAMES[@]} peers)"
 }
 
 peer_name() {
@@ -179,6 +224,7 @@ get_dump() {
 }
 
 load_names
+repair_names_map
 mark_names_changed
 init_history
 read_lastdb

@@ -6,7 +6,7 @@ Collects per-peer RX/TX deltas from `wg show … dump` inside the container and 
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **1.1.3**
+See [`VERSION`](VERSION). Current: **1.1.4**
 
 ## Requirements
 
@@ -18,9 +18,9 @@ See [`VERSION`](VERSION). Current: **1.1.3**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.1.3/awgstat-1.1.3.tar.gz
-tar -xzf awgstat-1.1.3.tar.gz
-cd awgstat-1.1.3
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.1.4/awgstat-1.1.4.tar.gz
+tar -xzf awgstat-1.1.4.tar.gz
+cd awgstat-1.1.4
 sudo bash install.sh
 ```
 
