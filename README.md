@@ -6,7 +6,7 @@ Collects per-peer RX/TX deltas from `wg show … dump` inside the container and 
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **1.1.2**
+See [`VERSION`](VERSION). Current: **1.1.3**
 
 ## Requirements
 
@@ -18,9 +18,9 @@ See [`VERSION`](VERSION). Current: **1.1.2**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.1.2/awgstat-1.1.2.tar.gz
-tar -xzf awgstat-1.1.2.tar.gz
-cd awgstat-1.1.2
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.1.3/awgstat-1.1.3.tar.gz
+tar -xzf awgstat-1.1.3.tar.gz
+cd awgstat-1.1.3
 sudo bash install.sh
 ```
 
@@ -29,7 +29,7 @@ Cron lives in **`/etc/cron.d/awgstat`** (system), not in `crontab -l`. Check wit
 Upgrade **does not** overwrite: `names.map`, `history.csv`, `last.db`, `backups/`, or your local `config` values (only bumps `VERSION` and adds new keys if missing).
 
 Default install path: `/opt/wgstats`  
-Cron: collect every minute, HTML every 5 minutes, backup check daily at 03:00.
+Cron: collect every minute, HTML every 5 minutes, forced HTML rebuild at 00:01 UTC+3, backup check daily at 03:00.
 
 ## Config
 
