@@ -7,6 +7,11 @@
 - `install.sh` prints full `/etc/cron.d/awgstat` (backup job is there; not shown by `crontab -l`)
 - Clearer comments in cron file for the 03:00 backup line
 
+## [1.1.2] — 2026-08-05
+
+### Fixed
+- Ежедневный принудительный пересчёт HTML в `00:05`, чтобы колонка `Today` не показывала трафик предыдущего дня, если сегодня трафика не было.
+
 ## [1.1.0] — 2026-08-04
 
 ### Added
