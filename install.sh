@@ -57,31 +57,78 @@ else
     ensure_config_key "BACKUP_DAYS" "7"
     ensure_config_key "BACKUP_DIR" '"${WORKDIR}/backups"'
     ensure_config_key "LAST_BACKUP" '"${WORKDIR}/.last_backup"'
+    ensure_config_key "REPORT_TZ" '"Europe/Moscow"'
 fi
 
 # Local data — create only if absent, never overwrite
 if [[ ! -f "${DEST}/names.map" ]]; then
     install -m 0644 "${SRC}/names.map.example" "${DEST}/names.map"
 fi
-# history.csv / last.db / .last_backup / backups/* — owned by runtime, never touched
+
+# Repair names.map to canonical pubkey:name (colon) format
+NAMES_FILE="${DEST}/names.map"
+export NAMES_FILE
+python3 - <<'PY'
+from pathlib import Path
+import os
+
+path = Path(os.environ["NAMES_FILE"])
+if not path.exists():
+    raise SystemExit(0)
+
+names = {}
+for raw in path.read_text(encoding="utf-8").splitlines():
+    line = raw.split("#", 1)[0].strip()
+    if not line:
+        continue
+    if ":" in line:
+        key, val = line.split(":", 1)
+    elif "=" in line:
+        key, val = line.rsplit("=", 1)
+    else:
+        continue
+    key, val = key.strip(), val.strip()
+    if val.startswith(":"):
+        val = val[1:]
+    if not key or not val:
+        continue
+    prev = names.get(key)
+    if prev is None:
+        names[key] = val
+    elif prev.startswith("неизвестный") and not val.startswith("неизвестный"):
+        names[key] = val
+
+lines = [f"{k}:{v}\n" for k, v in sorted(names.items())]
+new = "".join(lines)
+old = path.read_text(encoding="utf-8")
+if new != old:
+    path.write_text(new, encoding="utf-8")
+    print(f"names.map repaired → {len(names)} peers (colon format)")
+else:
+    print(f"names.map ok → {len(names)} peers")
+PY
 
 WEBROOT="$(awk -F= '/^WEBROOT=/{gsub(/"/,"",$2); print $2; exit}' "${DEST}/config" || true)"
 WEBROOT="${WEBROOT:-$WEBROOT_DEFAULT}"
 mkdir -p "${WEBROOT}"
 install -m 0644 "${SRC}/style.css" "${WEBROOT}/style.css"
 
-install -m 0644 "${SRC}/cron/awgstat" "${CRON_DST}"
-# cron.d requires trailing newline and root-owned 644
+REPORT_TZ="$(awk -F= '/^REPORT_TZ=/{gsub(/"/,"",$2); print $2; exit}' "${DEST}/config" || true)"
+REPORT_TZ="${REPORT_TZ:-Europe/Moscow}"
+sed "s|__REPORT_TZ__|${REPORT_TZ}|g" "${SRC}/cron/awgstat" >"${CRON_DST}"
 chmod 644 "${CRON_DST}"
 
 # Force HTML rebuild after upgrade
 touch "${DEST}/.changed"
-python3 "${DEST}/htmlgen.py" || true
+python3 "${DEST}/htmlgen.py" --force || true
 
 echo "Done. AWGStat ${VERSION}"
 echo "  code:    ${DEST}"
 echo "  webroot: ${WEBROOT}"
+echo "  tz:      ${REPORT_TZ}"
 echo "  cron:    ${CRON_DST}  (not visible in crontab -l — use: cat ${CRON_DST})"
 echo "  preserved: names.map history.csv last.db backups/ config(local keys)"
 echo "--- cron jobs ---"
 cat "${CRON_DST}"
+echo "--- names.map ---"
+cat "${DEST}/names.map"

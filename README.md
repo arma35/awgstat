@@ -6,7 +6,7 @@ Collects per-peer RX/TX deltas from `wg show … dump` inside the container and 
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **1.1.4**
+See [`VERSION`](VERSION). Current: **1.1.5**
 
 ## Requirements
 
@@ -18,9 +18,9 @@ See [`VERSION`](VERSION). Current: **1.1.4**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.1.4/awgstat-1.1.4.tar.gz
-tar -xzf awgstat-1.1.4.tar.gz
-cd awgstat-1.1.4
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.1.5/awgstat-1.1.5.tar.gz
+tar -xzf awgstat-1.1.5.tar.gz
+cd awgstat-1.1.5
 sudo bash install.sh
 ```
 
@@ -41,14 +41,15 @@ Cron: collect every minute, HTML every 5 minutes, forced HTML rebuild at 00:01 U
 | `WEBROOT` | HTML output directory |
 | `TITLE` | Page title |
 | `RETENTION_DAYS` | History retention |
+| `REPORT_TZ` | Timezone for Today + midnight rebuild (IANA, default `Europe/Moscow`) |
 | `BACKUP_DAYS` | Minimum days between data backups |
 | `BACKUP_DIR` | Where `.tar.gz` backups are stored |
 | `LAST_BACKUP` | Timestamp file of last successful backup |
 
-Map peer public keys to names in `names.map`:
+Map peer public keys to names in `names.map` (**colon** separator — keys often end with `=`):
 
 ```
-<base64-public-key>=phone
+<base64-public-key>:phone
 ```
 
 Unknown peers that generate traffic are appended automatically as `неизвестный`.

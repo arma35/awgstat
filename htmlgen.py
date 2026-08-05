@@ -7,8 +7,9 @@ import html
 import shutil
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -42,6 +43,14 @@ def expand(path: str, cfg: dict[str, str]) -> Path:
     return Path(path.replace("${WORKDIR}", workdir))
 
 
+def resolve_tz(name: str):
+    name = (name or "").strip() or "Europe/Moscow"
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return timezone.utc
+
+
 def fmt_bytes(value: int) -> str:
     units = ("B", "KB", "MB", "GB", "TB")
     size = float(max(value, 0))
@@ -54,28 +63,53 @@ def fmt_bytes(value: int) -> str:
     return f"{size:.1f} TB"
 
 
+def parse_name_line(line: str) -> tuple[str, str] | None:
+    """Parse names.map line. Canonical format: pubkey:name (colon)."""
+    line = line.split("#", 1)[0].strip()
+    if not line:
+        return None
+    if ":" in line:
+        key, val = line.split(":", 1)
+    elif "=" in line:
+        # Legacy broken '=' / '==' format
+        key, val = line.rsplit("=", 1)
+    else:
+        return None
+    key, val = key.strip(), val.strip()
+    if val.startswith(":"):
+        val = val[1:]
+    if not key or not val:
+        return None
+    return key, val
+
+
 def load_names(path: Path) -> dict[str, str]:
-    """Parse peer=name; split on LAST '=' because WG keys are base64 and may end with '='."""
     names: dict[str, str] = {}
     if not path.exists():
         return names
     for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line or "=" not in line:
+        parsed = parse_name_line(line)
+        if not parsed:
             continue
-        key, val = line.rsplit("=", 1)
-        key, val = key.strip(), val.strip()
-        if val.startswith(":"):
-            val = val[1:]
-        if not key or not val:
-            continue
-        # First real name wins; ignore later auto-unknown spam for the same peer
+        key, val = parsed
         prev = names.get(key)
         if prev is None:
             names[key] = val
         elif prev.startswith("неизвестный") and not val.startswith("неизвестный"):
             names[key] = val
     return names
+
+
+def lookup_name(names: dict[str, str], peer: str, fallback: str = "") -> str:
+    if peer in names:
+        return names[peer]
+    # Tolerate accidental missing/extra base64 padding
+    alt = peer.rstrip("=")
+    if alt in names:
+        return names[alt]
+    if not peer.endswith("=") and (peer + "=") in names:
+        return names[peer + "="]
+    return fallback
 
 
 def read_history(path: Path) -> list[dict[str, str]]:
@@ -107,9 +141,12 @@ def read_history(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def aggregate(rows: list[dict[str, str]]) -> dict[str, dict[str, object]]:
-    now = datetime.now()
-    today_start = datetime(now.year, now.month, now.day)
+def aggregate(
+    rows: list[dict[str, str]],
+    tz,
+) -> dict[str, dict[str, object]]:
+    now = datetime.now(tz)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = now - timedelta(days=7)
     month_start = now - timedelta(days=30)
 
@@ -126,16 +163,15 @@ def aggregate(rows: list[dict[str, str]]) -> dict[str, dict[str, object]]:
 
     for row in rows:
         try:
-            ts = datetime.fromtimestamp(int(row["timestamp"]))
+            ts = datetime.fromtimestamp(int(row["timestamp"]), tz=timezone.utc).astimezone(tz)
             rx = int(row["rx_bytes"])
             tx = int(row["tx_bytes"])
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, OSError):
             continue
 
         peer = row["peer"]
         total = rx + tx
         item = stats[peer]
-        # Historical name kept only as fallback; live names.map wins later
         if row.get("name"):
             item["name"] = row["name"]
         if row.get("ip"):
@@ -171,8 +207,8 @@ def render_html(
     title: str,
     version: str,
     rows: list[tuple[str, str, int, int, int, int]],
+    updated: str,
 ) -> str:
-    updated = datetime.now().strftime("%Y-%m-%d %H:%M")
     body_rows = []
     for name, ip, today, week, month, total in rows:
         body_rows.append(
@@ -235,6 +271,7 @@ def main() -> int:
     index_path = webroot / "index.html"
     title = cfg.get("TITLE", "AWGStat")
     version = read_version(cfg)
+    tz = resolve_tz(cfg.get("REPORT_TZ", "Europe/Moscow"))
     force = "--force" in sys.argv
     static_src = SCRIPT_DIR / "static" / "style.css"
     if not static_src.exists():
@@ -250,12 +287,11 @@ def main() -> int:
 
     names = load_names(names_path)
     rows = read_history(history)
-    stats = aggregate(rows)
+    stats = aggregate(rows, tz)
 
     table_rows: list[tuple[str, str, int, int, int, int]] = []
     for peer, item in stats.items():
-        # Live names.map always wins over historical CSV name
-        name = names.get(peer) or str(item["name"] or "")
+        name = lookup_name(names, peer, str(item["name"] or ""))
         ip = clean_ip(str(item["ip"]))
         table_rows.append(
             (
@@ -270,8 +306,11 @@ def main() -> int:
 
     table_rows.sort(key=lambda r: (-r[5], r[0].lower(), r[1]))
 
+    updated = datetime.now(tz).strftime("%Y-%m-%d %H:%M")
     webroot.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(render_html(title, version, table_rows), encoding="utf-8")
+    index_path.write_text(
+        render_html(title, version, table_rows, updated), encoding="utf-8"
+    )
 
     if static_src.exists():
         shutil.copy2(static_src, webroot / "style.css")

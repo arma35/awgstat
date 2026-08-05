@@ -48,18 +48,24 @@ mark_names_changed() {
     fi
 }
 
-# Base64 WireGuard keys often end with '=' — always split on the LAST '='.
+# names.map format: <wireguard-pubkey>:<display_name>
+# Pubkeys are base64 and often end with '=' — separator MUST be ':' (colon).
 parse_name_line() {
     local line="$1"
     local key val
-    key="${line%=*}"
-    val="${line##*=}"
-    # trim spaces
+    if [[ "${line}" == *":"* ]]; then
+        key="${line%%:*}"
+        val="${line#*:}"
+    else
+        # Legacy broken '=' format (key=name / key==name)
+        key="${line%=*}"
+        val="${line##*=}"
+    fi
     key="${key#"${key%%[![:space:]]*}"}"
     key="${key%"${key##*[![:space:]]}"}"
     val="${val#"${val%%[![:space:]]*}"}"
     val="${val%"${val##*[![:space:]]}"}"
-    # recover from old bug: value accidentally stored as ":name"
+    # recover from old bug: value stored as ":name"
     if [[ "${val}" == :* ]]; then
         val="${val:1}"
     fi
@@ -77,11 +83,11 @@ load_names() {
         line="${line%%#*}"
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"
-        [[ -z "${line}" || "${line}" != *"="* ]] && continue
+        [[ -z "${line}" ]] && continue
+        [[ "${line}" != *"="* && "${line}" != *":"* ]] && continue
         local key val
         IFS=$'\t' read -r key val < <(parse_name_line "${line}")
         [[ -z "${key}" || -z "${val}" ]] && continue
-        # First real name wins; later auto-"неизвестный" spam must not overwrite
         if [[ -z "${PEER_NAMES[${key}]:-}" ]]; then
             PEER_NAMES["${key}"]="${val}"
         elif is_auto_unknown "${PEER_NAMES[${key}]}" && ! is_auto_unknown "${val}"; then
@@ -90,24 +96,55 @@ load_names() {
     done <"${NAMES}"
 }
 
-# Rewrite names.map: one line per peer, drop duplicate junk from the '=' bug
+# Rewrite names.map to canonical "key:name", drop duplicates/junk
 repair_names_map() {
     [[ -f "${NAMES}" ]] || return 0
-    local lines total
-    total="$(wc -l <"${NAMES}" | tr -d '[:space:]')"
-    [[ "${total}" =~ ^[0-9]+$ ]] || return 0
-    (( total <= ${#PEER_NAMES[@]} )) && return 0
+    (( ${#PEER_NAMES[@]} == 0 )) && return 0
 
-    local tmp key
+    local tmp key need=0 line
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        [[ -z "${line}" ]] && continue
+        # Any legacy '='-only line or duplicate spam → rewrite
+        if [[ "${line}" != *":"* ]]; then
+            need=1
+            break
+        fi
+    done <"${NAMES}"
+
+    local total
+    total="$(grep -cve '^[[:space:]]*$' "${NAMES}" || true)"
+    if (( total > ${#PEER_NAMES[@]} )); then
+        need=1
+    fi
+
+    # Also rewrite if any stored key would not round-trip as key:name
+    if (( need == 0 )); then
+        while IFS= read -r line || [[ -n "${line}" ]]; do
+            line="${line%%#*}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            [[ -z "${line}" ]] && continue
+            local k v
+            IFS=$'\t' read -r k v < <(parse_name_line "${line}")
+            if [[ "${line}" != "${k}:${v}" ]]; then
+                need=1
+                break
+            fi
+        done <"${NAMES}"
+    fi
+
+    (( need == 0 )) && return 0
+
     tmp="$(mktemp)"
     {
         for key in "${!PEER_NAMES[@]}"; do
-            printf '%s=%s\n' "${key}" "${PEER_NAMES[${key}]}"
+            printf '%s:%s\n' "${key}" "${PEER_NAMES[${key}]}"
         done
     } | LC_ALL=C sort >"${tmp}"
     mv "${tmp}" "${NAMES}"
     touch "${CHANGED}"
-    log "names.map: repaired duplicates (${total} lines → ${#PEER_NAMES[@]} peers)"
+    log "names.map: repaired to key:name (${total:-?} lines → ${#PEER_NAMES[@]} peers)"
 }
 
 peer_name() {
@@ -146,7 +183,7 @@ ensure_peer_name() {
     done
 
     touch "${NAMES}"
-    printf '%s=%s\n' "${peer}" "${label}" >>"${NAMES}"
+    printf '%s:%s\n' "${peer}" "${label}" >>"${NAMES}"
     PEER_NAMES["${peer}"]="${label}"
     log "names.map: added ${peer} → ${label}"
     echo "${label}"

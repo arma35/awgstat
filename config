@@ -2,7 +2,7 @@
 # AWGStat configuration
 ########################################
 
-VERSION="1.1.4"
+VERSION="1.1.5"
 
 # Docker container with AmneziaWG
 CONTAINER="amnezia-awg2"
@@ -24,6 +24,9 @@ WEBROOT="/var/www/html-20180/wgstats"
 
 # History retention
 RETENTION_DAYS=365
+
+# Timezone for "Today" / midnight HTML rebuild (IANA name, e.g. Europe/Moscow = UTC+3)
+REPORT_TZ="Europe/Moscow"
 
 # Backup period in days (backup.sh / cron at 03:00)
 BACKUP_DAYS=7
