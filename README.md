@@ -2,11 +2,23 @@
 
 Traffic statistics for AmneziaWG running in Docker.
 
-Collects per-peer RX/TX deltas from `wg show … dump` inside the container and publishes an HTML report.
+Collects per-peer RX/TX deltas from `wg show … dump` inside the container and
+publishes a static, SARG-style HTML report tree.
+
+Generated reports include:
+
+- a dashboard with today, current week, current month, and retained totals;
+- daily, weekly, and monthly report archives;
+- a traffic-ranked user table for every period;
+- a user page with daily, hourly, and raw interval breakdowns;
+- RX, TX, total traffic, percentage share, IP, and activity timestamps.
+
+AmneziaWG does not expose HTTP destinations, so AWGStat cannot produce SARG's
+sites, URLs, denied requests, or download reports.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **1.1.5**
+See [`VERSION`](VERSION). Current: **1.2.0**
 
 ## Requirements
 
@@ -18,9 +30,9 @@ See [`VERSION`](VERSION). Current: **1.1.5**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.1.5/awgstat-1.1.5.tar.gz
-tar -xzf awgstat-1.1.5.tar.gz
-cd awgstat-1.1.5
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.2.0/awgstat-1.2.0.tar.gz
+tar -xzf awgstat-1.2.0.tar.gz
+cd awgstat-1.2.0
 sudo bash install.sh
 ```
 
@@ -42,6 +54,10 @@ Cron: collect every minute, HTML every 5 minutes, forced HTML rebuild at 00:01 U
 | `TITLE` | Page title |
 | `RETENTION_DAYS` | History retention |
 | `REPORT_TZ` | Timezone for Today + midnight rebuild (IANA, default `Europe/Moscow`) |
+| `DAILY_REPORTS` | Number of daily archive periods (`0` = all retained history) |
+| `WEEKLY_REPORTS` | Number of weekly archive periods (`0` = all retained history) |
+| `MONTHLY_REPORTS` | Number of monthly archive periods (`0` = all retained history) |
+| `DETAIL_ROWS` | Maximum raw intervals on a user page (`0` = hide) |
 | `BACKUP_DAYS` | Minimum days between data backups |
 | `BACKUP_DIR` | Where `.tar.gz` backups are stored |
 | `LAST_BACKUP` | Timestamp file of last successful backup |
@@ -63,11 +79,34 @@ sudo /opt/wgstats/backup.sh --force  # always
 
 Archive contents: `names.map`, `history.csv`, `last.db`, `config`, `VERSION`.
 
+## Generated report tree
+
+```text
+index.html
+reports/
+├── daily/
+│   ├── index.html
+│   └── YYYY-MM-DD/
+│       ├── index.html
+│       └── users/<peer-id>.html
+├── weekly/
+│   ├── index.html
+│   └── YYYY-Www/...
+└── monthly/
+    ├── index.html
+    └── YYYY-MM/...
+```
+
+The generator builds the complete tree in a temporary directory and publishes
+it only after all pages are ready. Files outside `index.html`, `style.css`, and
+`reports/` in `WEBROOT` are left untouched.
+
 ## Layout
 
 ```
 wgstats.sh           # collector
-htmlgen.py           # HTML generator
+htmlgen.py           # HTML generator entry point
+reportgen.py         # SARG-style report implementation
 backup.sh            # data backup
 config               # settings
 style.css            # report CSS

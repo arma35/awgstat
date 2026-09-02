@@ -21,7 +21,7 @@ fix_crlf() {
     sed -i 's/\r$//' "${f}"
 }
 
-for f in install.sh backup.sh wgstats.sh htmlgen.py config cron/awgstat VERSION; do
+for f in install.sh backup.sh wgstats.sh htmlgen.py reportgen.py config cron/awgstat VERSION; do
     fix_crlf "${SRC}/${f}"
 done
 
@@ -32,6 +32,7 @@ mkdir -p "${DEST}/logs" "${DEST}/www" "${DEST}/backups"
 # Application files (always refresh)
 install -m 0755 "${SRC}/wgstats.sh" "${DEST}/wgstats.sh"
 install -m 0755 "${SRC}/htmlgen.py" "${DEST}/htmlgen.py"
+install -m 0644 "${SRC}/reportgen.py" "${DEST}/reportgen.py"
 install -m 0755 "${SRC}/backup.sh" "${DEST}/backup.sh"
 install -m 0644 "${SRC}/style.css" "${DEST}/style.css"
 install -m 0644 "${SRC}/VERSION" "${DEST}/VERSION"
@@ -58,6 +59,10 @@ else
     ensure_config_key "BACKUP_DIR" '"${WORKDIR}/backups"'
     ensure_config_key "LAST_BACKUP" '"${WORKDIR}/.last_backup"'
     ensure_config_key "REPORT_TZ" '"Europe/Moscow"'
+    ensure_config_key "DAILY_REPORTS" "31"
+    ensure_config_key "WEEKLY_REPORTS" "12"
+    ensure_config_key "MONTHLY_REPORTS" "12"
+    ensure_config_key "DETAIL_ROWS" "200"
 fi
 
 # Local data — create only if absent, never overwrite
