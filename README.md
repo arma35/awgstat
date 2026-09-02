@@ -18,7 +18,7 @@ sites, URLs, denied requests, or download reports.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **1.2.0**
+See [`VERSION`](VERSION). Current: **1.2.1**
 
 ## Requirements
 
@@ -30,9 +30,9 @@ See [`VERSION`](VERSION). Current: **1.2.0**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.2.0/awgstat-1.2.0.tar.gz
-tar -xzf awgstat-1.2.0.tar.gz
-cd awgstat-1.2.0
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.2.1/awgstat-1.2.1.tar.gz
+tar -xzf awgstat-1.2.1.tar.gz
+cd awgstat-1.2.1
 sudo bash install.sh
 ```
 

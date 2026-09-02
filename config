@@ -2,7 +2,7 @@
 # AWGStat configuration
 ########################################
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 
 # Docker container with AmneziaWG
 CONTAINER="amnezia-awg2"

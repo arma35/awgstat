@@ -1,0 +1,15 @@
+---
+description: Publish every AWGStat change as a new immutable release
+alwaysApply: true
+---
+
+# Release Every Change
+
+- Every repository change intended for publication must increment `VERSION`.
+- Update the version in `VERSION`, `config`, `README.md`, and `CHANGELOG.md`.
+- Never overwrite, move, or delete an existing release or tag.
+- Commit releases as `Release AWGStat <version>`.
+- Build and verify a new `awgstat-<version>.tar.gz` artifact.
+- Shell scripts and Python files in release archives must use LF endings.
+- Publish the new GitHub release before deploying that exact version.
+- Create and verify server backups before every deployment.
