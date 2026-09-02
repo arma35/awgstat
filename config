@@ -2,7 +2,7 @@
 # AWGStat configuration
 ########################################
 
-VERSION="1.2.1"
+VERSION="2.0.0"
 
 # Docker container with AmneziaWG
 CONTAINER="amnezia-awg2"
@@ -28,7 +28,7 @@ RETENTION_DAYS=365
 # Timezone for "Today" / midnight HTML rebuild (IANA name, e.g. Europe/Moscow = UTC+3)
 REPORT_TZ="Europe/Moscow"
 
-# Number of SARG-style archive periods to publish (0 = all retained history)
+# Number of classic SARG file-tree periods to publish (0 = all retained history)
 DAILY_REPORTS=31
 WEEKLY_REPORTS=12
 MONTHLY_REPORTS=12

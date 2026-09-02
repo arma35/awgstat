@@ -3,22 +3,26 @@
 Traffic statistics for AmneziaWG running in Docker.
 
 Collects per-peer RX/TX deltas from `wg show … dump` inside the container and
-publishes a static, SARG-style HTML report tree.
+publishes a static report tree that follows the classic SARG 2.4 layout and
+navigation model.
 
 Generated reports include:
 
-- a dashboard with today, current week, current month, and retained totals;
-- daily, weekly, and monthly report archives;
-- a traffic-ranked user table for every period;
-- a user page with daily, hourly, and raw interval breakdowns;
-- RX, TX, total traffic, percentage share, IP, and activity timestamps.
+- a SARG-style report index with separate daily, weekly, and monthly archives;
+- classic `DDMonYYYY-DDMonYYYY` report directories;
+- a `Top users` table with `NUM`, date/time and graph links, `USERID`,
+  `USERIP`, `CONNECT`, RX/TX, bytes, percentage, total, and average rows;
+- a SARG-style user report for every peer;
+- a 24-hour date/time matrix and an RX/TX graph for every user and period;
+- SARG-compatible `sarg-date`, `sarg-users`, and `sarg-general` metadata.
 
 AmneziaWG does not expose HTTP destinations, so AWGStat cannot produce SARG's
-sites, URLs, denied requests, or download reports.
+sites, URLs, denied requests, or download reports. `CONNECT` therefore means
+AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **1.2.1**
+See [`VERSION`](VERSION). Current: **2.0.0**
 
 ## Requirements
 
@@ -30,9 +34,9 @@ See [`VERSION`](VERSION). Current: **1.2.1**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v1.2.1/awgstat-1.2.1.tar.gz
-tar -xzf awgstat-1.2.1.tar.gz
-cd awgstat-1.2.1
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.0.0/awgstat-2.0.0.tar.gz
+tar -xzf awgstat-2.0.0.tar.gz
+cd awgstat-2.0.0
 sudo bash install.sh
 ```
 
@@ -83,23 +87,32 @@ Archive contents: `names.map`, `history.csv`, `last.db`, `config`, `VERSION`.
 
 ```text
 index.html
-reports/
-├── daily/
-│   ├── index.html
-│   └── YYYY-MM-DD/
-│       ├── index.html
-│       └── users/<peer-id>.html
-├── weekly/
-│   ├── index.html
-│   └── YYYY-Www/...
-└── monthly/
+style.css
+images/
+├── awgstat.svg
+├── datetime.svg
+└── graph.svg
+daily/
+├── index.html
+└── DDMonYYYY-DDMonYYYY/
     ├── index.html
-    └── YYYY-MM/...
+    ├── sarg-date
+    ├── sarg-users
+    ├── sarg-general
+    └── <peer-id>/
+        ├── <peer-id>.html
+        ├── d<peer-id>.html
+        ├── graph.html
+        └── graph.svg
+weekly/
+└── ...same SARG report layout...
+monthly/
+└── ...same SARG report layout...
 ```
 
 The generator builds the complete tree in a temporary directory and publishes
-it only after all pages are ready. Files outside `index.html`, `style.css`, and
-`reports/` in `WEBROOT` are left untouched.
+it only after all pages are ready. Files outside `index.html`, `style.css`,
+`images/`, `daily/`, `weekly/`, and `monthly/` in `WEBROOT` are left untouched.
 
 ## Layout
 

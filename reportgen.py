@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a SARG-style static report tree from AWGStat history."""
+"""Generate classic SARG-style static reports from AWGStat history."""
 
 from __future__ import annotations
 
@@ -20,14 +20,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPORT_KINDS = ("daily", "weekly", "monthly")
 KIND_TITLES = {
-    "daily": "Ежедневные отчёты",
-    "weekly": "Еженедельные отчёты",
-    "monthly": "Ежемесячные отчёты",
+    "daily": "DAILY REPORTS",
+    "weekly": "WEEKLY REPORTS",
+    "monthly": "MONTHLY REPORTS",
 }
-KIND_SHORT = {
-    "daily": "День",
-    "weekly": "Неделя",
-    "monthly": "Месяц",
+KIND_DESCRIPTIONS = {
+    "daily": "Daily report index",
+    "weekly": "Weekly report index",
+    "monthly": "Monthly report index",
 }
 KIND_CONFIG_KEYS = {
     "daily": "DAILY_REPORTS",
@@ -39,6 +39,12 @@ KIND_DEFAULT_LIMITS = {
     "weekly": 12,
     "monthly": 12,
 }
+OWNED_DIRECTORIES = (*REPORT_KINDS, "images")
+OWNED_FILES = ("index.html", "style.css")
+MONTH_ABBREVIATIONS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
 
 
 @dataclass(frozen=True)
@@ -189,17 +195,13 @@ def fmt_count(value: int) -> str:
 
 
 def fmt_datetime(value: datetime | None) -> str:
-    return value.strftime("%d.%m.%Y %H:%M") if value else "—"
-
-
-def fmt_date(value: datetime) -> str:
-    return value.strftime("%d.%m.%Y")
+    return value.strftime("%d/%m/%Y-%H:%M") if value else "—"
 
 
 def fmt_percent(part: int, whole: int) -> str:
     if whole <= 0:
-        return "0.0%"
-    return f"{part * 100 / whole:.1f}%"
+        return "0.00%"
+    return f"{part * 100 / whole:.2f}%"
 
 
 def clean_ip(ip: str) -> str:
@@ -304,13 +306,13 @@ def period_metadata(kind: str, value: datetime) -> tuple[str, str, datetime, dat
         start = midnight
         end = start + timedelta(days=1)
         key = start.strftime("%Y-%m-%d")
-        label = fmt_date(start)
+        label = start.strftime("%d/%m/%Y")
     elif kind == "weekly":
         start = midnight - timedelta(days=value.weekday())
         end = start + timedelta(days=7)
         iso = start.isocalendar()
         key = f"{iso.year}-W{iso.week:02d}"
-        label = f"{fmt_date(start)} — {fmt_date(end - timedelta(days=1))}"
+        label = f"{start:%d/%m/%Y} - {(end - timedelta(days=1)):%d/%m/%Y}"
     elif kind == "monthly":
         start = midnight.replace(day=1)
         if start.month == 12:
@@ -318,7 +320,7 @@ def period_metadata(kind: str, value: datetime) -> tuple[str, str, datetime, dat
         else:
             end = start.replace(month=start.month + 1)
         key = start.strftime("%Y-%m")
-        label = start.strftime("%m.%Y")
+        label = f"{start:%d/%m/%Y} - {(end - timedelta(days=1)):%d/%m/%Y}"
     else:
         raise ValueError(f"unknown report kind: {kind}")
     return key, label, start, end
@@ -356,14 +358,6 @@ def build_periods(
     return periods
 
 
-def current_period(periods: list[PeriodReport], kind: str, now: datetime) -> PeriodReport:
-    key = period_metadata(kind, now)[0]
-    for period in periods:
-        if period.key == key:
-            return period
-    raise LookupError(f"current {kind} period was not generated")
-
-
 def resolved_name(summary: TrafficSummary, names: dict[str, str]) -> str:
     return lookup_name(names, summary.peer, summary.name) or "неизвестный"
 
@@ -372,310 +366,20 @@ def user_slug(peer: str) -> str:
     return hashlib.sha256(peer.encode("utf-8")).hexdigest()[:16]
 
 
-def share_markup(value: int, total: int) -> str:
-    percent = value * 100 / total if total else 0.0
-    width = min(max(percent, 0.0), 100.0)
-    return (
-        '<div class="share-cell">'
-        f'<div class="share-bar"><span style="width:{width:.2f}%"></span></div>'
-        f"<span>{percent:.1f}%</span>"
-        "</div>"
+def period_dirname(period: PeriodReport) -> str:
+    """Use the classic SARG European file-tree naming convention."""
+    last_day = period.end - timedelta(days=1)
+    start = (
+        f"{period.start.day:02d}"
+        f"{MONTH_ABBREVIATIONS[period.start.month - 1]}"
+        f"{period.start.year:04d}"
     )
-
-
-def breadcrumbs(items: list[tuple[str, str | None]]) -> str:
-    parts: list[str] = []
-    for label, href in items:
-        escaped = html.escape(label)
-        if href:
-            parts.append(f'<a href="{html.escape(href, quote=True)}">{escaped}</a>')
-        else:
-            parts.append(f"<span>{escaped}</span>")
-    return f'<nav class="breadcrumbs">{"<b>›</b>".join(parts)}</nav>'
-
-
-def stat_card(label: str, value: str, hint: str = "", href: str | None = None) -> str:
-    inner = (
-        f'<span class="stat-label">{html.escape(label)}</span>'
-        f'<strong>{html.escape(value)}</strong>'
-        f'<small>{html.escape(hint)}</small>'
+    end = (
+        f"{last_day.day:02d}"
+        f"{MONTH_ABBREVIATIONS[last_day.month - 1]}"
+        f"{last_day.year:04d}"
     )
-    if href:
-        return f'<a class="stat-card" href="{html.escape(href, quote=True)}">{inner}</a>'
-    return f'<div class="stat-card">{inner}</div>'
-
-
-def render_document(
-    site_title: str,
-    page_title: str,
-    version: str,
-    updated: str,
-    root_prefix: str,
-    content: str,
-) -> str:
-    escaped_site_title = html.escape(site_title)
-    return f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="generator" content="AWGStat {html.escape(version)}">
-  <title>{html.escape(page_title)} — {escaped_site_title}</title>
-  <link rel="stylesheet" href="{root_prefix}style.css">
-</head>
-<body>
-  <header class="topbar">
-    <div>
-      <a class="brand" href="{root_prefix}index.html">{escaped_site_title}</a>
-      <span class="version">v{html.escape(version)}</span>
-    </div>
-    <p class="updated">Обновлено: {html.escape(updated)}</p>
-  </header>
-  <main>
-    {content}
-  </main>
-  <footer>
-    AWGStat показывает статистику VPN-туннеля: пользователей, адреса и объём
-    трафика. Посещённые сайты и URL на этом уровне недоступны.
-  </footer>
-</body>
-</html>
-"""
-
-
-def render_period_table(periods: list[PeriodReport], link_prefix: str) -> str:
-    rows: list[str] = []
-    for period in periods:
-        href = f"{link_prefix}{period.key}/index.html"
-        rows.append(
-            "<tr>"
-            f'<td><a href="{html.escape(href, quote=True)}">{html.escape(period.label)}</a></td>'
-            f'<td class="num">{fmt_count(len(period.users))}</td>'
-            f'<td class="num">{fmt_count(period.samples)}</td>'
-            f'<td class="num rx">{fmt_bytes(period.rx_bytes)}</td>'
-            f'<td class="num tx">{fmt_bytes(period.tx_bytes)}</td>'
-            f'<td class="num total">{fmt_bytes(period.total)}</td>'
-            "</tr>"
-        )
-    if not rows:
-        rows.append('<tr><td colspan="6" class="empty">Нет данных</td></tr>')
-    return (
-        '<div class="table-wrap"><table>'
-        "<thead><tr><th>Период</th><th class=\"num\">Пользователи</th>"
-        "<th class=\"num\">Интервалы</th><th class=\"num\">RX</th>"
-        "<th class=\"num\">TX</th><th class=\"num\">Всего</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div>"
-    )
-
-
-def render_root_user_table(
-    all_users: dict[str, TrafficSummary],
-    today: PeriodReport,
-    week: PeriodReport,
-    month: PeriodReport,
-    names: dict[str, str],
-) -> str:
-    rows: list[str] = []
-    ordered = sorted(
-        all_users.values(),
-        key=lambda item: (-item.total, resolved_name(item, names).casefold(), item.ip),
-    )
-    for rank, summary in enumerate(ordered, start=1):
-        today_total = today.users.get(summary.peer, TrafficSummary(summary.peer)).total
-        week_total = week.users.get(summary.peer, TrafficSummary(summary.peer)).total
-        month_summary = month.users.get(summary.peer)
-        month_total = month_summary.total if month_summary else 0
-        name = html.escape(resolved_name(summary, names))
-        if month_summary:
-            href = (
-                f"reports/monthly/{month.key}/users/{user_slug(summary.peer)}.html"
-            )
-            name = f'<a href="{href}">{name}</a>'
-        rows.append(
-            "<tr>"
-            f'<td class="rank">{rank}</td><td>{name}</td>'
-            f"<td>{html.escape(summary.ip or '—')}</td>"
-            f'<td class="num">{fmt_bytes(today_total)}</td>'
-            f'<td class="num">{fmt_bytes(week_total)}</td>'
-            f'<td class="num">{fmt_bytes(month_total)}</td>'
-            f'<td class="num total">{fmt_bytes(summary.total)}</td>'
-            "</tr>"
-        )
-    if not rows:
-        rows.append('<tr><td colspan="7" class="empty">Трафик пока не зафиксирован</td></tr>')
-    return (
-        '<div class="table-wrap"><table class="users-table">'
-        "<thead><tr><th>#</th><th>Пользователь</th><th>IP</th>"
-        "<th class=\"num\">Сегодня</th><th class=\"num\">Неделя</th>"
-        "<th class=\"num\">Месяц</th><th class=\"num\">За всё время</th>"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
-    )
-
-
-def render_root(
-    site_title: str,
-    version: str,
-    updated: str,
-    periods: dict[str, list[PeriodReport]],
-    all_users: dict[str, TrafficSummary],
-    names: dict[str, str],
-    now: datetime,
-) -> str:
-    today = current_period(periods["daily"], "daily", now)
-    week = current_period(periods["weekly"], "weekly", now)
-    month = current_period(periods["monthly"], "monthly", now)
-    grand_total = sum(item.total for item in all_users.values())
-
-    cards = "".join(
-        (
-            stat_card(
-                "Сегодня",
-                fmt_bytes(today.total),
-                f"{len(today.users)} польз. · RX {fmt_bytes(today.rx_bytes)} · TX {fmt_bytes(today.tx_bytes)}",
-                f"reports/daily/{today.key}/index.html",
-            ),
-            stat_card(
-                "Текущая неделя",
-                fmt_bytes(week.total),
-                f"{len(week.users)} польз. · {week.label}",
-                f"reports/weekly/{week.key}/index.html",
-            ),
-            stat_card(
-                "Текущий месяц",
-                fmt_bytes(month.total),
-                f"{len(month.users)} польз. · {month.label}",
-                f"reports/monthly/{month.key}/index.html",
-            ),
-            stat_card(
-                "Вся история",
-                fmt_bytes(grand_total),
-                f"{len(all_users)} пользователей",
-            ),
-        )
-    )
-
-    archive_sections: list[str] = []
-    for kind in REPORT_KINDS:
-        archive_sections.append(
-            '<section class="report-group">'
-            f'<div class="section-title"><h2>{KIND_TITLES[kind]}</h2>'
-            f'<a href="reports/{kind}/index.html">Все периоды →</a></div>'
-            f'{render_period_table(periods[kind][:8], f"reports/{kind}/")}'
-            "</section>"
-        )
-
-    content = (
-        '<section class="intro"><h1>Сводный отчёт</h1>'
-        "<p>Статические отчёты по трафику AmneziaWG в структуре, близкой к SARG.</p>"
-        "</section>"
-        f'<section class="stats-grid">{cards}</section>'
-        '<section><div class="section-title"><h2>Пользователи</h2>'
-        '<span class="muted">Календарные периоды в часовом поясе отчёта</span></div>'
-        f"{render_root_user_table(all_users, today, week, month, names)}</section>"
-        f"{''.join(archive_sections)}"
-    )
-    return render_document(site_title, "Сводный отчёт", version, updated, "", content)
-
-
-def render_category(
-    site_title: str,
-    version: str,
-    updated: str,
-    kind: str,
-    periods: list[PeriodReport],
-) -> str:
-    content = (
-        f"{breadcrumbs([('Главная', '../../index.html'), (KIND_TITLES[kind], None)])}"
-        f'<section class="intro"><h1>{KIND_TITLES[kind]}</h1>'
-        f"<p>Сохранено периодов: {fmt_count(len(periods))}.</p></section>"
-        f"{render_period_table(periods, '')}"
-    )
-    return render_document(
-        site_title,
-        KIND_TITLES[kind],
-        version,
-        updated,
-        "../../",
-        content,
-    )
-
-
-def render_users_table(period: PeriodReport, names: dict[str, str]) -> str:
-    ordered = sorted(
-        period.users.values(),
-        key=lambda item: (-item.total, resolved_name(item, names).casefold(), item.ip),
-    )
-    rows: list[str] = []
-    for rank, summary in enumerate(ordered, start=1):
-        href = f"users/{user_slug(summary.peer)}.html"
-        rows.append(
-            "<tr>"
-            f'<td class="rank">{rank}</td>'
-            f'<td><a href="{href}">{html.escape(resolved_name(summary, names))}</a></td>'
-            f"<td>{html.escape(summary.ip or '—')}</td>"
-            f'<td class="num">{fmt_count(summary.samples)}</td>'
-            f'<td class="num rx">{fmt_bytes(summary.rx_bytes)}</td>'
-            f'<td class="num tx">{fmt_bytes(summary.tx_bytes)}</td>'
-            f'<td class="num total">{fmt_bytes(summary.total)}</td>'
-            f"<td>{share_markup(summary.total, period.total)}</td>"
-            f'<td class="nowrap">{fmt_datetime(summary.last_seen)}</td>'
-            "</tr>"
-        )
-    if not rows:
-        rows.append('<tr><td colspan="9" class="empty">В этом периоде трафика нет</td></tr>')
-    return (
-        '<div class="table-wrap"><table class="users-table">'
-        "<thead><tr><th>#</th><th>Пользователь</th><th>IP</th>"
-        "<th class=\"num\">Интервалы</th><th class=\"num\">RX</th>"
-        "<th class=\"num\">TX</th><th class=\"num\">Всего</th>"
-        "<th>Доля</th><th>Последняя активность</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div>"
-    )
-
-
-def render_period(
-    site_title: str,
-    version: str,
-    updated: str,
-    period: PeriodReport,
-    names: dict[str, str],
-    newer: PeriodReport | None,
-    older: PeriodReport | None,
-) -> str:
-    navigation: list[str] = []
-    if newer:
-        navigation.append(f'<a href="../{newer.key}/index.html">← {newer.label}</a>')
-    navigation.append('<a href="../index.html">Все периоды</a>')
-    if older:
-        navigation.append(f'<a href="../{older.key}/index.html">{older.label} →</a>')
-
-    cards = "".join(
-        (
-            stat_card("Всего", fmt_bytes(period.total), f"{period.samples} интервалов"),
-            stat_card("Получено (RX)", fmt_bytes(period.rx_bytes)),
-            stat_card("Передано (TX)", fmt_bytes(period.tx_bytes)),
-            stat_card("Пользователи", fmt_count(len(period.users))),
-        )
-    )
-    content = (
-        f"{breadcrumbs([('Главная', '../../../index.html'), (KIND_TITLES[period.kind], '../index.html'), (period.label, None)])}"
-        f'<section class="intro"><span class="eyebrow">{KIND_SHORT[period.kind]}</span>'
-        f"<h1>{html.escape(period.label)}</h1>"
-        f"<p>{fmt_date(period.start)} 00:00 — {fmt_date(period.end)} 00:00</p></section>"
-        f'<nav class="period-nav">{"".join(navigation)}</nav>'
-        f'<section class="stats-grid">{cards}</section>'
-        '<section><div class="section-title"><h2>Рейтинг пользователей</h2>'
-        '<span class="muted">Сортировка по общему трафику</span></div>'
-        f"{render_users_table(period, names)}</section>"
-    )
-    return render_document(
-        site_title,
-        f"{KIND_SHORT[period.kind]} {period.label}",
-        version,
-        updated,
-        "../../../",
-        content,
-    )
+    return f"{start}-{end}"
 
 
 def grouped_summaries(
@@ -696,66 +400,323 @@ def hourly_summaries(rows: list[HistoryRow]) -> list[tuple[str, TrafficSummary]]
     groups: dict[int, list[HistoryRow]] = defaultdict(list)
     for row in rows:
         groups[row.timestamp.hour].append(row)
-    result: list[tuple[str, TrafficSummary]] = []
     peer = rows[0].peer if rows else ""
+    result: list[tuple[str, TrafficSummary]] = []
     for hour in range(24):
         if groups[hour]:
             summary = next(iter(aggregate_rows(groups[hour]).values()))
         else:
             summary = TrafficSummary(peer=peer)
-        result.append((f"{hour:02d}:00–{hour:02d}:59", summary))
+        result.append((f"{hour:02d}H", summary))
     return result
 
 
-def render_breakdown(
-    title: str,
-    groups: list[tuple[str, TrafficSummary]],
-    grand_total: int,
-) -> str:
-    rows: list[str] = []
-    for label, summary in groups:
-        rows.append(
-            "<tr>"
-            f"<td>{html.escape(label)}</td>"
-            f'<td class="num">{fmt_count(summary.samples)}</td>'
-            f'<td class="num rx">{fmt_bytes(summary.rx_bytes)}</td>'
-            f'<td class="num tx">{fmt_bytes(summary.tx_bytes)}</td>'
-            f'<td class="num total">{fmt_bytes(summary.total)}</td>'
-            f"<td>{share_markup(summary.total, grand_total)}</td>"
-            "</tr>"
-        )
+def nav_markup(root_prefix: str) -> str:
+    links = [
+        (f"{root_prefix}index.html", "REPORT INDEX"),
+        (f"{root_prefix}daily/index.html", "DAILY"),
+        (f"{root_prefix}weekly/index.html", "WEEKLY"),
+        (f"{root_prefix}monthly/index.html", "MONTHLY"),
+    ]
     return (
-        f'<section><div class="section-title"><h2>{html.escape(title)}</h2></div>'
-        '<div class="table-wrap"><table><thead><tr><th>Период</th>'
-        "<th class=\"num\">Интервалы</th><th class=\"num\">RX</th>"
-        "<th class=\"num\">TX</th><th class=\"num\">Всего</th><th>Доля</th>"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>"
+        '<div class="navigation">'
+        + " | ".join(
+            f'<a href="{html.escape(href, quote=True)}">{label}</a>'
+            for href, label in links
+        )
+        + "</div>\n"
     )
 
 
-def render_recent_rows(rows: list[HistoryRow], limit: int) -> str:
-    if limit <= 0:
-        return ""
-    selected = sorted(rows, key=lambda row: row.timestamp, reverse=True)[:limit]
+def render_document(
+    site_title: str,
+    page_title: str,
+    version: str,
+    updated: str,
+    root_prefix: str,
+    header_rows: list[tuple[str, bool]],
+    content: str,
+) -> str:
+    rows = [f'<tr><th class="title_c">{html.escape(site_title)}</th></tr>']
+    for text, strong in header_rows:
+        tag = "th" if strong else "td"
+        rows.append(f'<tr><{tag} class="header_c">{html.escape(text)}</{tag}></tr>')
+    return f"""<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html lang="ru">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="generator" content="AWGStat {html.escape(version)}">
+  <title>{html.escape(page_title)}</title>
+  <link rel="stylesheet" href="{html.escape(root_prefix, quote=True)}style.css" type="text/css">
+</head>
+<body class="body">
+<div class="logo"><a href="{html.escape(root_prefix, quote=True)}index.html"><img src="{html.escape(root_prefix, quote=True)}images/awgstat.svg" alt="AWGStat"></a>&nbsp;AmneziaWG Traffic Analysis Report</div>
+{nav_markup(root_prefix)}
+<div class="title"><table cellpadding="0" cellspacing="0">
+{''.join(rows)}
+</table></div>
+{content}
+<div class="info">Generated by <a href="https://github.com/arma35/awgstat">AWGStat-{html.escape(version)}</a> on {html.escape(updated)}<br>VPN traffic only: AmneziaWG does not expose visited sites or URLs.</div>
+</body>
+</html>
+"""
+
+
+def empty_row(columns: int, message: str = "No data") -> str:
+    return f'<tr><td class="data3" colspan="{columns}">{html.escape(message)}</td></tr>'
+
+
+def render_root(
+    site_title: str,
+    version: str,
+    updated: str,
+    periods: dict[str, list[PeriodReport]],
+) -> str:
+    rows: list[str] = []
+    for kind in REPORT_KINDS:
+        latest = periods[kind][0]
+        average = latest.total // len(latest.users) if latest.users else 0
+        rows.append(
+            "<tr>"
+            f'<td class="data2"><a href="{kind}/index.html">{KIND_TITLES[kind]}</a></td>'
+            f'<td class="data">{fmt_count(len(periods[kind]))}</td>'
+            f'<td class="data2">{html.escape(latest.label)}</td>'
+            f'<td class="data">{fmt_count(len(latest.users))}</td>'
+            f'<td class="data">{fmt_bytes(latest.total)}</td>'
+            f'<td class="data">{fmt_bytes(average)}</td>'
+            "</tr>"
+        )
+    content = (
+        '<div class="index"><table cellpadding="1" cellspacing="2">'
+        '<thead><tr><th class="header_l">REPORT TYPE</th>'
+        '<th class="header_l">PERIODS</th>'
+        '<th class="header_l">LATEST PERIOD</th>'
+        '<th class="header_l">USERS</th>'
+        '<th class="header_l">BYTES</th>'
+        '<th class="header_l">AVERAGE</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+    return render_document(
+        site_title,
+        "AWGStat reports",
+        version,
+        updated,
+        "",
+        [("AWGStat reports", True)],
+        content,
+    )
+
+
+def render_period_table(periods: list[PeriodReport], updated: str) -> str:
+    rows: list[str] = []
+    for period in periods:
+        average = period.total // len(period.users) if period.users else 0
+        dirname = period_dirname(period)
+        rows.append(
+            "<tr>"
+            f'<td class="data2"><a href="{dirname}/index.html">{dirname}</a></td>'
+            f'<td class="data2">{html.escape(updated)}</td>'
+            f'<td class="data">{fmt_count(len(period.users))}</td>'
+            f'<td class="data">{fmt_bytes(period.total)}</td>'
+            f'<td class="data">{fmt_bytes(average)}</td>'
+            "</tr>"
+        )
+    if not rows:
+        rows.append(empty_row(5))
+    return (
+        '<div class="index"><table cellpadding="1" cellspacing="2">'
+        '<thead><tr><th class="header_l">FILE/PERIOD</th>'
+        '<th class="header_l">CREATION DATE</th>'
+        '<th class="header_l">USERS</th>'
+        '<th class="header_l">BYTES</th>'
+        '<th class="header_l">AVERAGE</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
+
+def render_category(
+    site_title: str,
+    version: str,
+    updated: str,
+    kind: str,
+    periods: list[PeriodReport],
+) -> str:
+    return render_document(
+        site_title,
+        KIND_DESCRIPTIONS[kind],
+        version,
+        updated,
+        "../",
+        [
+            (KIND_TITLES[kind], False),
+            (f"Available reports: {len(periods)}", True),
+        ],
+        render_period_table(periods, updated),
+    )
+
+
+def render_users_table(period: PeriodReport, names: dict[str, str]) -> str:
+    ordered = sorted(
+        period.users.values(),
+        key=lambda item: (-item.total, resolved_name(item, names).casefold(), item.ip),
+    )
+    rows: list[str] = []
+    for rank, summary in enumerate(ordered, start=1):
+        slug = user_slug(summary.peer)
+        rows.append(
+            "<tr>"
+            f'<td class="data">{rank}</td>'
+            '<td class="data2">'
+            f'<a href="{slug}/graph.html"><img class="report-icon" src="../../images/graph.svg" title="Graphic report" alt="G"></a>&nbsp;'
+            f'<a href="{slug}/d{slug}.html"><img class="report-icon" src="../../images/datetime.svg" title="Date/time report" alt="T"></a>'
+            "</td>"
+            f'<td class="data2"><a href="{slug}/{slug}.html">{html.escape(resolved_name(summary, names))}</a></td>'
+            f'<td class="data2">{html.escape(summary.ip or "—")}</td>'
+            f'<td class="data">{fmt_count(summary.samples)}</td>'
+            f'<td class="data">{fmt_bytes(summary.rx_bytes)}</td>'
+            f'<td class="data">{fmt_bytes(summary.tx_bytes)}</td>'
+            f'<td class="data">{fmt_bytes(summary.total)}</td>'
+            f'<td class="data">{fmt_percent(summary.total, period.total)}</td>'
+            "</tr>"
+        )
+    if not rows:
+        rows.append(empty_row(9, "No traffic in this period"))
+
+    total_users = len(ordered)
+    average_samples = period.samples // total_users if total_users else 0
+    average_rx = period.rx_bytes // total_users if total_users else 0
+    average_tx = period.tx_bytes // total_users if total_users else 0
+    average_total = period.total // total_users if total_users else 0
+    footer = (
+        "<tfoot><tr><td></td><td></td>"
+        '<th class="header_l" colspan="2">TOTAL</th>'
+        f'<th class="header_r">{fmt_count(period.samples)}</th>'
+        f'<th class="header_r">{fmt_bytes(period.rx_bytes)}</th>'
+        f'<th class="header_r">{fmt_bytes(period.tx_bytes)}</th>'
+        f'<th class="header_r">{fmt_bytes(period.total)}</th><td></td></tr>'
+        "<tr><td></td><td></td>"
+        '<th class="header_l" colspan="2">AVERAGE</th>'
+        f'<th class="header_r">{fmt_count(average_samples)}</th>'
+        f'<th class="header_r">{fmt_bytes(average_rx)}</th>'
+        f'<th class="header_r">{fmt_bytes(average_tx)}</th>'
+        f'<th class="header_r">{fmt_bytes(average_total)}</th><td></td></tr></tfoot>'
+    )
+    return (
+        '<div class="report report-scroll"><table cellpadding="1" cellspacing="2">'
+        '<thead><tr><th class="header_l">NUM</th>'
+        '<th class="header_l"></th>'
+        '<th class="header_l">USERID</th>'
+        '<th class="header_l">USERIP</th>'
+        '<th class="header_l" title="AWGStat traffic sampling intervals">CONNECT</th>'
+        '<th class="header_c" colspan="2">RX-TX</th>'
+        '<th class="header_l">BYTES</th>'
+        '<th class="header_l">%BYTES</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody>{footer}</table></div>"
+        '<div class="report-note">CONNECT is the number of AWGStat traffic intervals, not TCP connections.</div>'
+    )
+
+
+def render_period(
+    site_title: str,
+    version: str,
+    updated: str,
+    period: PeriodReport,
+    names: dict[str, str],
+) -> str:
+    links = (
+        '<div class="report"><table cellpadding="1" cellspacing="2">'
+        f'<tr><td class="link"><a href="../index.html">{KIND_TITLES[period.kind]}</a></td></tr>'
+        "</table></div>"
+    )
+    return render_document(
+        site_title,
+        f"AWGStat report for {period.label}",
+        version,
+        updated,
+        "../../",
+        [
+            (f"Period: {period.label}", False),
+            ("Sort: BYTES, reverse", False),
+            ("Top users", True),
+        ],
+        links + render_users_table(period, names),
+    )
+
+
+def render_user_rows(
+    summary: TrafficSummary,
+    rows: list[HistoryRow],
+    detail_limit: int,
+) -> str:
+    if detail_limit <= 0:
+        return '<div class="report-note">Traffic interval detail is disabled.</div>'
+
+    selected = sorted(rows, key=lambda item: item.timestamp, reverse=True)
+    selected = selected[:detail_limit]
     body: list[str] = []
     for row in selected:
         body.append(
             "<tr>"
-            f'<td class="nowrap">{fmt_datetime(row.timestamp)}</td>'
-            f"<td>{html.escape(clean_ip(row.ip) or '—')}</td>"
-            f'<td class="num rx">{fmt_bytes(row.rx_bytes)}</td>'
-            f'<td class="num tx">{fmt_bytes(row.tx_bytes)}</td>'
-            f'<td class="num total">{fmt_bytes(row.total)}</td>'
-            f'<td class="num">{fmt_count(row.interval)} с</td>'
+            f'<td class="data2">{fmt_datetime(row.timestamp)}</td>'
+            f'<td class="data2">{html.escape(clean_ip(row.ip) or "—")}</td>'
+            f'<td class="data">{fmt_count(row.interval)} s</td>'
+            f'<td class="data">{fmt_bytes(row.rx_bytes)}</td>'
+            f'<td class="data">{fmt_bytes(row.tx_bytes)}</td>'
+            f'<td class="data">{fmt_bytes(row.total)}</td>'
+            f'<td class="data">{fmt_percent(row.total, summary.total)}</td>'
             "</tr>"
         )
+    if not body:
+        body.append(empty_row(7))
+
+    average_rx = summary.rx_bytes // summary.samples if summary.samples else 0
+    average_tx = summary.tx_bytes // summary.samples if summary.samples else 0
+    average_total = summary.total // summary.samples if summary.samples else 0
+    average_interval = (
+        sum(row.interval for row in rows) // len(rows)
+        if rows
+        else 0
+    )
+    footer = (
+        '<tfoot><tr><th class="header_l" colspan="2">TOTAL</th>'
+        f'<th class="header_r">{fmt_count(sum(row.interval for row in rows))} s</th>'
+        f'<th class="header_r">{fmt_bytes(summary.rx_bytes)}</th>'
+        f'<th class="header_r">{fmt_bytes(summary.tx_bytes)}</th>'
+        f'<th class="header_r">{fmt_bytes(summary.total)}</th>'
+        '<td></td></tr><tr><th class="header_l" colspan="2">AVERAGE</th>'
+        f'<th class="header_r">{fmt_count(average_interval)} s</th>'
+        f'<th class="header_r">{fmt_bytes(average_rx)}</th>'
+        f'<th class="header_r">{fmt_bytes(average_tx)}</th>'
+        f'<th class="header_r">{fmt_bytes(average_total)}</th>'
+        "<td></td></tr></tfoot>"
+    )
+    limit_note = ""
+    if detail_limit > 0 and len(rows) > detail_limit:
+        limit_note = (
+            f'<div class="report-note">Showing the latest {detail_limit} of '
+            f"{len(rows)} traffic intervals. Totals include all intervals.</div>"
+        )
     return (
-        '<section><div class="section-title"><h2>Последние интервалы</h2>'
-        f'<span class="muted">Показано до {fmt_count(limit)}</span></div>'
-        '<div class="table-wrap"><table><thead><tr><th>Дата и время</th><th>IP</th>'
-        "<th class=\"num\">RX</th><th class=\"num\">TX</th>"
-        "<th class=\"num\">Всего</th><th class=\"num\">Интервал</th>"
-        f"</tr></thead><tbody>{''.join(body)}</tbody></table></div></section>"
+        '<div class="report report-scroll"><table cellpadding="2" cellspacing="1">'
+        '<thead><tr><th class="header_l">TRAFFIC INTERVAL</th>'
+        '<th class="header_l">IP/NAME</th>'
+        '<th class="header_l">INTERVAL</th>'
+        '<th class="header_l">RX</th>'
+        '<th class="header_l">TX</th>'
+        '<th class="header_l">BYTES</th>'
+        '<th class="header_l">%BYTES</th></tr></thead>'
+        f"<tbody>{''.join(body)}</tbody>{footer}</table></div>{limit_note}"
+    )
+
+
+def user_report_links(slug: str) -> str:
+    return (
+        '<div class="report"><table cellpadding="1" cellspacing="2">'
+        '<tr><td class="link">'
+        f'<a href="{slug}.html">User report</a>&nbsp; | &nbsp;'
+        f'<a href="graph.html">Graphic report</a>&nbsp; | &nbsp;'
+        f'<a href="d{slug}.html">Date/time report</a>'
+        "</td></tr></table></div>"
     )
 
 
@@ -770,53 +731,205 @@ def render_user(
     detail_limit: int,
 ) -> str:
     name = resolved_name(summary, names)
-    cards = "".join(
-        (
-            stat_card("Всего", fmt_bytes(summary.total), fmt_percent(summary.total, period.total)),
-            stat_card("Получено (RX)", fmt_bytes(summary.rx_bytes)),
-            stat_card("Передано (TX)", fmt_bytes(summary.tx_bytes)),
-            stat_card("Интервалы", fmt_count(summary.samples)),
-        )
+    slug = user_slug(summary.peer)
+    return render_document(
+        site_title,
+        "User report",
+        version,
+        updated,
+        "../../../",
+        [
+            (f"Period: {period.label}", False),
+            (f"User: {name}", False),
+            ("Sort: DATE/TIME, reverse", False),
+            ("User report", True),
+        ],
+        user_report_links(slug)
+        + render_user_rows(summary, rows, detail_limit),
     )
-    daily = grouped_summaries(rows, lambda row: row.timestamp.strftime("%Y-%m-%d"))
-    daily = [
-        (
-            datetime.strptime(label, "%Y-%m-%d").strftime("%d.%m.%Y"),
-            item,
+
+
+def render_user_datetime(
+    site_title: str,
+    version: str,
+    updated: str,
+    period: PeriodReport,
+    summary: TrafficSummary,
+    rows: list[HistoryRow],
+    names: dict[str, str],
+) -> str:
+    name = resolved_name(summary, names)
+    slug = user_slug(summary.peer)
+    values: dict[tuple[str, int], int] = defaultdict(int)
+    dates: set[str] = set()
+    for row in rows:
+        day = row.timestamp.strftime("%Y-%m-%d")
+        dates.add(day)
+        values[(day, row.timestamp.hour)] += row.total
+    ordered_dates = sorted(dates)
+    hour_totals = [0] * 24
+    table_rows: list[str] = []
+    for day in ordered_dates:
+        row_total = 0
+        cells: list[str] = []
+        for hour in range(24):
+            value = values[(day, hour)]
+            row_total += value
+            hour_totals[hour] += value
+            cells.append(
+                f'<td class="data">{fmt_bytes(value) if value else ""}</td>'
+            )
+        label = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m/%Y")
+        table_rows.append(
+            f'<tr><td class="data">{label}</td>{"".join(cells)}'
+            f'<td class="data">{fmt_bytes(row_total)}</td></tr>'
         )
-        for label, item in daily
-    ]
-    hourly = hourly_summaries(rows)
-    daily_section = (
-        render_breakdown("Трафик по дням", daily, summary.total)
-        if len(daily) > 1
-        else ""
+    if not table_rows:
+        table_rows.append(empty_row(26))
+
+    headers = "".join(
+        f'<th class="header_c">{hour:02d}H<br>BYTES</th>'
+        for hour in range(24)
     )
-    content = (
-        f"{breadcrumbs([('Главная', '../../../../index.html'), (KIND_TITLES[period.kind], '../../index.html'), (period.label, '../index.html'), (name, None)])}"
-        f'<section class="intro"><span class="eyebrow">Пользователь</span>'
-        f"<h1>{html.escape(name)}</h1>"
-        f"<p>IP: <strong>{html.escape(summary.ip or '—')}</strong> · "
-        f"активность: {fmt_datetime(summary.first_seen)} — {fmt_datetime(summary.last_seen)}</p>"
-        f'<a class="back-link" href="../index.html">← Вернуться к рейтингу</a></section>'
-        f'<section class="stats-grid">{cards}</section>'
-        f"{daily_section}"
-        f'{render_breakdown("Трафик по часам", hourly, summary.total)}'
-        f"{render_recent_rows(rows, detail_limit)}"
+    total_cells = "".join(
+        f'<th class="header_r">{fmt_bytes(value) if value else ""}</th>'
+        for value in hour_totals
+    )
+    table = (
+        '<div class="report report-scroll"><table class="hourly" cellpadding="0" cellspacing="2">'
+        f'<thead><tr><th class="header_c">DATE</th>{headers}'
+        '<th class="header_c">TOTAL<br>BYTES</th></tr></thead>'
+        f"<tbody>{''.join(table_rows)}</tbody>"
+        f'<tfoot><tr><th class="header_l">TOTAL</th>{total_cells}'
+        f'<th class="header_r">{fmt_bytes(sum(hour_totals))}</th></tr></tfoot>'
+        "</table></div>"
     )
     return render_document(
         site_title,
-        f"{name} — {period.label}",
+        "Date/time report",
         version,
         updated,
-        "../../../../",
+        "../../../",
+        [
+            (f"Period: {period.label}", False),
+            (f"User: {name}", False),
+            ("Date/time report", True),
+        ],
+        user_report_links(slug) + table,
+    )
+
+
+def render_graph_svg(rows: list[HistoryRow]) -> str:
+    unique_days = {row.timestamp.strftime("%Y-%m-%d") for row in rows}
+    if len(unique_days) > 1:
+        groups = grouped_summaries(
+            rows,
+            lambda row: row.timestamp.strftime("%Y-%m-%d"),
+        )
+        groups = [
+            (datetime.strptime(label, "%Y-%m-%d").strftime("%d/%m"), summary)
+            for label, summary in groups
+        ]
+    else:
+        groups = hourly_summaries(rows)
+
+    width, height = 900, 360
+    left, top, right, bottom = 70, 35, 25, 65
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+    maximum = max((max(item.rx_bytes, item.tx_bytes) for _, item in groups), default=0)
+    maximum = max(maximum, 1)
+    slot = plot_width / max(len(groups), 1)
+    bar_width = max(2.0, min(12.0, slot * 0.32))
+    bars: list[str] = []
+    labels: list[str] = []
+    for index, (label, item) in enumerate(groups):
+        center = left + slot * index + slot / 2
+        rx_height = item.rx_bytes * plot_height / maximum
+        tx_height = item.tx_bytes * plot_height / maximum
+        bars.append(
+            f'<rect x="{center - bar_width - 1:.1f}" y="{top + plot_height - rx_height:.1f}" width="{bar_width:.1f}" height="{rx_height:.1f}" fill="#436EEE"/>'
+            f'<rect x="{center + 1:.1f}" y="{top + plot_height - tx_height:.1f}" width="{bar_width:.1f}" height="{tx_height:.1f}" fill="#FF8C00"/>'
+        )
+        labels.append(
+            f'<text x="{center:.1f}" y="{height - 38}" text-anchor="middle">{html.escape(label)}</text>'
+        )
+    grid: list[str] = []
+    for step in range(6):
+        y = top + plot_height * step / 5
+        value = int(maximum * (5 - step) / 5)
+        grid.append(
+            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="#d8d8d8"/>'
+            f'<text x="{left - 8}" y="{y + 3:.1f}" text-anchor="end">{html.escape(fmt_bytes(value))}</text>'
+        )
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="RX and TX traffic graph">
+<rect width="100%" height="100%" fill="white"/>
+<g font-family="Tahoma,Verdana,Arial,sans-serif" font-size="9" fill="#000">
+{''.join(grid)}
+<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}" stroke="#333"/>
+<line x1="{left}" y1="{top + plot_height}" x2="{width - right}" y2="{top + plot_height}" stroke="#333"/>
+{''.join(bars)}
+{''.join(labels)}
+<rect x="{left}" y="10" width="10" height="10" fill="#436EEE"/><text x="{left + 15}" y="19">RX</text>
+<rect x="{left + 55}" y="10" width="10" height="10" fill="#FF8C00"/><text x="{left + 70}" y="19">TX</text>
+</g>
+</svg>
+"""
+
+
+def render_user_graph(
+    site_title: str,
+    version: str,
+    updated: str,
+    period: PeriodReport,
+    summary: TrafficSummary,
+    names: dict[str, str],
+) -> str:
+    name = resolved_name(summary, names)
+    slug = user_slug(summary.peer)
+    content = (
+        user_report_links(slug)
+        + '<div class="report graph-report"><table cellpadding="0" cellspacing="2">'
+        '<tr><td><img src="graph.svg" alt="RX/TX traffic graph"></td></tr>'
+        "</table></div>"
+    )
+    return render_document(
+        site_title,
+        "Graphic report",
+        version,
+        updated,
+        "../../../",
+        [
+            (f"Period: {period.label}", False),
+            (f"User: {name}", False),
+            ("Graphic report", True),
+        ],
         content,
     )
 
 
+AWGSTAT_LOGO = """<svg xmlns="http://www.w3.org/2000/svg" width="112" height="36" viewBox="0 0 112 36">
+<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#eaffff"/><stop offset=".45" stop-color="#16b8d4"/><stop offset="1" stop-color="#006699"/></linearGradient></defs>
+<rect width="112" height="36" fill="white"/>
+<text x="4" y="25" font-family="Verdana,Tahoma,Arial,sans-serif" font-size="20" font-weight="bold" font-style="italic" fill="url(#g)" stroke="#004b6b" stroke-width=".55">AWGStat</text>
+<path d="M4 29h102M8 32h94" stroke="#006699" stroke-width="1.4"/>
+</svg>
+"""
+
+GRAPH_ICON = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14">
+<rect width="14" height="14" fill="white"/><rect x="1" y="7" width="3" height="6" fill="#0066ff"/><rect x="5.5" y="3" width="3" height="10" fill="#00b530"/><rect x="10" y="8" width="3" height="5" fill="#ff00bd"/><path d="M.5 13.5h13" stroke="#222"/>
+</svg>
+"""
+
+DATETIME_ICON = """<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14">
+<rect x=".5" y="2.5" width="9" height="10" fill="#fff" stroke="#111"/><path d="M1 5h8M3 1v3M7 1v3" stroke="#111"/><path d="M2 7h2v2H2zM5 7h2v2H5zM2 10h2v2H2z" fill="#e44"/><circle cx="10.5" cy="9.5" r="3" fill="#fff" stroke="#111"/><path d="M10.5 7.7v2l1.3.8" fill="none" stroke="#111"/>
+</svg>
+"""
+
+
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    path.write_text(content, encoding="utf-8", newline="\n")
 
 
 def generate_site(
@@ -828,7 +941,7 @@ def generate_site(
 ) -> dict[str, int]:
     site_title = cfg.get("TITLE", "AWGStat")
     version = read_version(cfg)
-    updated = now.strftime("%d.%m.%Y %H:%M")
+    updated = now.strftime("%d/%m/%Y %H:%M")
     detail_limit = config_int(cfg, "DETAIL_ROWS", 200, maximum=5000)
 
     periods: dict[str, list[PeriodReport]] = {}
@@ -841,55 +954,85 @@ def generate_site(
         )
         periods[kind] = build_periods(rows, kind, now, limit)
 
-    all_users = aggregate_rows(rows)
+    write_text(output / "images" / "awgstat.svg", AWGSTAT_LOGO)
+    write_text(output / "images" / "graph.svg", GRAPH_ICON)
+    write_text(output / "images" / "datetime.svg", DATETIME_ICON)
     write_text(
         output / "index.html",
-        render_root(site_title, version, updated, periods, all_users, names, now),
+        render_root(site_title, version, updated, periods),
     )
 
     page_count = 1
     user_page_count = 0
     for kind in REPORT_KINDS:
         write_text(
-            output / "reports" / kind / "index.html",
+            output / kind / "index.html",
             render_category(site_title, version, updated, kind, periods[kind]),
         )
         page_count += 1
-        for index, period in enumerate(periods[kind]):
-            newer = periods[kind][index - 1] if index > 0 else None
-            older = periods[kind][index + 1] if index + 1 < len(periods[kind]) else None
-            period_root = output / "reports" / kind / period.key
+        for period in periods[kind]:
+            period_root = output / kind / period_dirname(period)
             write_text(
                 period_root / "index.html",
-                render_period(
-                    site_title,
-                    version,
-                    updated,
-                    period,
-                    names,
-                    newer,
-                    older,
-                ),
+                render_period(site_title, version, updated, period, names),
+            )
+            write_text(
+                period_root / "sarg-date",
+                f"{now:%Y-%m-%d %H:%M:%S} {int(bool(now.dst()))}\n",
+            )
+            write_text(period_root / "sarg-users", f"{len(period.users)}\n")
+            write_text(
+                period_root / "sarg-general",
+                f"TOTAL\t{period.samples}\t{period.total}\t0\t{period.rx_bytes}\t{period.tx_bytes}\n",
             )
             page_count += 1
+
             rows_by_peer: dict[str, list[HistoryRow]] = defaultdict(list)
             for row in period.rows:
                 rows_by_peer[row.peer].append(row)
-            for peer, summary in period.users.items():
+            for peer in sorted(period.users):
+                summary = period.users[peer]
+                slug = user_slug(peer)
+                user_root = period_root / slug
+                peer_rows = rows_by_peer[peer]
                 write_text(
-                    period_root / "users" / f"{user_slug(peer)}.html",
+                    user_root / f"{slug}.html",
                     render_user(
                         site_title,
                         version,
                         updated,
                         period,
                         summary,
-                        rows_by_peer[peer],
+                        peer_rows,
                         names,
                         detail_limit,
                     ),
                 )
-                page_count += 1
+                write_text(
+                    user_root / f"d{slug}.html",
+                    render_user_datetime(
+                        site_title,
+                        version,
+                        updated,
+                        period,
+                        summary,
+                        peer_rows,
+                        names,
+                    ),
+                )
+                write_text(
+                    user_root / "graph.html",
+                    render_user_graph(
+                        site_title,
+                        version,
+                        updated,
+                        period,
+                        summary,
+                        names,
+                    ),
+                )
+                write_text(user_root / "graph.svg", render_graph_svg(peer_rows))
+                page_count += 3
                 user_page_count += 1
 
     return {
@@ -907,28 +1050,60 @@ def names_map_changed(names_path: Path, index_path: Path) -> bool:
     return names_path.stat().st_mtime > index_path.stat().st_mtime
 
 
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def publish_site(stage: Path, webroot: Path) -> None:
-    """Replace only AWGStat-owned output while preserving unrelated web files."""
+    """Transactionally replace AWGStat-owned output and preserve other files."""
     webroot.mkdir(parents=True, exist_ok=True)
-    staged_reports = stage / "reports"
-    target_reports = webroot / "reports"
-    old_reports = webroot / ".reports-old"
+    owned = (*OWNED_DIRECTORIES, *OWNED_FILES)
+    backups: dict[str, Path] = {}
+    installed: list[Path] = []
 
-    if old_reports.exists():
-        shutil.rmtree(old_reports)
-    if target_reports.exists():
-        target_reports.replace(old_reports)
+    for name in owned:
+        source = stage / name
+        if not source.exists():
+            raise FileNotFoundError(f"staged report output is missing: {source}")
+        target = webroot / name
+        backup = webroot / f".awgstat-old-{name}"
+        if backup.exists():
+            if target.exists():
+                remove_path(backup)
+            else:
+                backup.replace(target)
+
     try:
-        staged_reports.replace(target_reports)
+        for name in owned:
+            target = webroot / name
+            backup = webroot / f".awgstat-old-{name}"
+            if target.exists():
+                target.replace(backup)
+                backups[name] = backup
+        for name in owned:
+            target = webroot / name
+            (stage / name).replace(target)
+            installed.append(target)
     except Exception:
-        if old_reports.exists() and not target_reports.exists():
-            old_reports.replace(target_reports)
+        for target in reversed(installed):
+            remove_path(target)
+        for name, backup in backups.items():
+            target = webroot / name
+            if backup.exists() and not target.exists():
+                backup.replace(target)
         raise
-    if old_reports.exists():
-        shutil.rmtree(old_reports)
 
-    os.replace(stage / "index.html", webroot / "index.html")
-    os.replace(stage / "style.css", webroot / "style.css")
+    for backup in backups.values():
+        remove_path(backup)
+
+    # v1.x owned this directory; remove it only after the v2 tree is complete.
+    for legacy_name in ("reports", ".reports-old"):
+        legacy = webroot / legacy_name
+        if legacy.exists():
+            remove_path(legacy)
 
 
 def main() -> int:
@@ -944,7 +1119,7 @@ def main() -> int:
         force
         or changed.exists()
         or not index_path.exists()
-        or not (webroot / "reports").exists()
+        or any(not (webroot / name).exists() for name in OWNED_DIRECTORIES)
         or names_map_changed(names_path, index_path)
     )
     if not need_rebuild:
@@ -955,10 +1130,7 @@ def main() -> int:
     names = load_names(names_path)
     rows = read_history(history, tz)
 
-    static_src = SCRIPT_DIR / "static" / "style.css"
-    if not static_src.exists():
-        static_src = SCRIPT_DIR / "style.css"
-
+    static_src = SCRIPT_DIR / "style.css"
     webroot.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix=".awgstat-build-",
@@ -969,7 +1141,7 @@ def main() -> int:
         if static_src.exists():
             shutil.copy2(static_src, stage / "style.css")
         else:
-            (stage / "style.css").write_text("", encoding="utf-8")
+            write_text(stage / "style.css", "")
         publish_site(stage, webroot)
 
     changed.unlink(missing_ok=True)

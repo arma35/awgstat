@@ -8,11 +8,15 @@ from pathlib import Path
 
 from reportgen import (
     HistoryRow,
+    aggregate_rows,
     build_periods,
     generate_site,
     parse_name_line,
+    period_dirname,
     publish_site,
     read_history,
+    render_graph_svg,
+    render_user_rows,
     user_slug,
 )
 
@@ -30,12 +34,12 @@ class LinkParser(HTMLParser):
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
-        if tag not in {"a", "link"}:
+        if tag not in {"a", "img", "link", "script"}:
             return
         values = dict(attrs)
-        href = values.get("href")
-        if href:
-            self.links.append(href)
+        target = values.get("href") or values.get("src")
+        if target:
+            self.links.append(target)
 
 
 def row(
@@ -106,6 +110,26 @@ class ReportGeneratorTests(unittest.TestCase):
         self.assertEqual(rows[0].rx_bytes, 0)
         self.assertEqual(rows[0].tx_bytes, 0)
 
+    def test_detail_limit_zero_hides_raw_intervals(self) -> None:
+        rows = [
+            row(datetime(2026, 9, 2, 10, 0, tzinfo=TZ), "peer-a", 100, 50),
+        ]
+        summary = aggregate_rows(rows)["peer-a"]
+
+        self.assertIn(
+            "detail is disabled",
+            render_user_rows(summary, rows, 0),
+        )
+
+    def test_graph_orders_days_chronologically_across_months(self) -> None:
+        rows = [
+            row(datetime(2026, 9, 1, 10, 0, tzinfo=TZ), "peer-a", 100, 50),
+            row(datetime(2026, 8, 31, 10, 0, tzinfo=TZ), "peer-a", 100, 50),
+        ]
+        graph = render_graph_svg(rows)
+
+        self.assertLess(graph.index("31/08"), graph.index("01/09"))
+
     def test_site_contains_archives_and_user_details(self) -> None:
         now = datetime(2026, 9, 2, 17, 0, tzinfo=TZ)
         rows = [
@@ -121,7 +145,7 @@ class ReportGeneratorTests(unittest.TestCase):
         ]
         cfg = {
             "TITLE": "Test AWGStat",
-            "VERSION": "1.2.0-test",
+            "VERSION": "2.0.0-test",
             "DAILY_REPORTS": "31",
             "WEEKLY_REPORTS": "12",
             "MONTHLY_REPORTS": "12",
@@ -133,25 +157,38 @@ class ReportGeneratorTests(unittest.TestCase):
             output = Path(temporary)
             result = generate_site(output, cfg, rows, names, now)
             slug = user_slug("peer-a")
+            report_dir = period_dirname(
+                build_periods(rows, "daily", now, 31)[0]
+            )
             index = (output / "index.html").read_text(encoding="utf-8")
-            period = (
-                output / "reports" / "daily" / "2026-09-02" / "index.html"
+            category = (
+                output / "daily" / "index.html"
             ).read_text(encoding="utf-8")
-            user = (
-                output
-                / "reports"
-                / "daily"
-                / "2026-09-02"
-                / "users"
-                / f"{slug}.html"
+            period = (
+                output / "daily" / report_dir / "index.html"
+            ).read_text(encoding="utf-8")
+            user_root = output / "daily" / report_dir / slug
+            user = (user_root / f"{slug}.html").read_text(encoding="utf-8")
+            datetime_report = (
+                user_root / f"d{slug}.html"
             ).read_text(encoding="utf-8")
 
-            self.assertTrue((output / "reports" / "daily" / "index.html").exists())
-            self.assertIn("reports/daily/2026-09-02/index.html", index)
+            self.assertTrue((output / "daily" / "index.html").exists())
+            self.assertIn("daily/index.html", index)
+            self.assertIn("02Sep2026-02Sep2026", category)
             self.assertIn("Alice &lt;Admin&gt;", period)
             self.assertNotIn("Alice <Admin>", period)
-            self.assertIn("Трафик по часам", user)
-            self.assertIn("10:00–10:59", user)
+            self.assertIn("TRAFFIC INTERVAL", user)
+            self.assertIn("Date/time report", datetime_report)
+            self.assertIn("10H", datetime_report)
+            self.assertTrue((user_root / "graph.html").exists())
+            self.assertTrue((user_root / "graph.svg").exists())
+            self.assertTrue(
+                (output / "daily" / report_dir / "sarg-date").exists()
+            )
+            self.assertTrue(
+                (output / "daily" / report_dir / "sarg-users").exists()
+            )
             self.assertGreater(result["pages"], 4)
             self.assertGreater(result["user_pages"], 0)
 
@@ -192,11 +229,15 @@ class ReportGeneratorTests(unittest.TestCase):
             root = Path(temporary)
             stage = root / "stage"
             webroot = root / "www"
-            (stage / "reports").mkdir(parents=True)
+            for directory in ("daily", "weekly", "monthly", "images"):
+                (stage / directory).mkdir(parents=True)
+                (stage / directory / "new.html").write_text(
+                    "new",
+                    encoding="utf-8",
+                )
             webroot.mkdir()
             (stage / "index.html").write_text("new index", encoding="utf-8")
             (stage / "style.css").write_text("new style", encoding="utf-8")
-            (stage / "reports" / "new.html").write_text("new", encoding="utf-8")
             (webroot / "keep.txt").write_text("keep", encoding="utf-8")
             (webroot / "reports").mkdir()
             (webroot / "reports" / "old.html").write_text("old", encoding="utf-8")
@@ -204,8 +245,9 @@ class ReportGeneratorTests(unittest.TestCase):
             publish_site(stage, webroot)
 
             self.assertEqual((webroot / "keep.txt").read_text(), "keep")
-            self.assertTrue((webroot / "reports" / "new.html").exists())
-            self.assertFalse((webroot / "reports" / "old.html").exists())
+            self.assertTrue((webroot / "daily" / "new.html").exists())
+            self.assertTrue((webroot / "images" / "new.html").exists())
+            self.assertFalse((webroot / "reports").exists())
 
 
 if __name__ == "__main__":
