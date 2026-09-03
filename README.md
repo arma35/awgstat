@@ -11,7 +11,8 @@ Generated reports include:
 - a SARG-style report index with daily, weekly, monthly, all-time, and online
   reports;
 - a minute-updated online report with collector freshness, current peer state,
-  RX/TX rates, recent rankings, and total/per-user time-series graphs;
+  RX/TX rates, today/month/rolling-30-day totals, recent rankings, and
+  total/per-user time-series graphs;
 - classic `DDMonYYYY-DDMonYYYY` report directories;
 - a `Top users` table with `NUM`, date/time and graph links, `USERID`,
   `USERIP`, `CONNECT`, RX/TX, bytes, percentage, total, and average rows;
@@ -25,7 +26,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.1.0**
+See [`VERSION`](VERSION). Current: **2.1.1**
 
 ## Requirements
 
@@ -37,9 +38,9 @@ See [`VERSION`](VERSION). Current: **2.1.0**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.1.0/awgstat-2.1.0.tar.gz
-tar -xzf awgstat-2.1.0.tar.gz
-cd awgstat-2.1.0
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.1.1/awgstat-2.1.1.tar.gz
+tar -xzf awgstat-2.1.1.tar.gz
+cd awgstat-2.1.1
 sudo bash install.sh
 ```
 
@@ -102,6 +103,11 @@ in the browser. `TRAFFIC` means byte counters changed in the latest sample;
 true. These states are measurements, not persistent VPN sessions. If the
 collector heartbeat exceeds `ONLINE_STALE_MINUTES`, current rates are hidden
 and the report is marked `STALE`.
+
+The current-peers table shows per-user totals for `TODAY` and `THIS MONTH` in
+`REPORT_TZ`, plus a rolling `LAST 30 DAYS` total. These values come from
+AWGStat history. `WG COUNTERS` remains the kernel counter since the WireGuard
+interface was created and can reset when that interface is recreated.
 
 Graphs and recent rankings use actual AWGStat traffic intervals from the last
 `ONLINE_WINDOW_MINUTES`. Missing minutes are rendered as zero. No site, URL, or

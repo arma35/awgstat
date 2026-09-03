@@ -17,6 +17,7 @@ from reportgen import (
     generate_online_site,
     generate_site,
     online_peer_status,
+    online_period_totals,
     online_snapshot_status,
     parse_name_line,
     period_dirname,
@@ -195,6 +196,22 @@ class ReportGeneratorTests(unittest.TestCase):
             "NO SNAPSHOT",
         )
 
+    def test_online_period_totals_use_calendar_and_rolling_windows(self) -> None:
+        now = datetime(2026, 9, 3, 15, 0, tzinfo=TZ)
+        rows = [
+            row(datetime(2026, 9, 3, 1, 0, tzinfo=TZ), "peer-a", 100, 50),
+            row(datetime(2026, 9, 1, 1, 0, tzinfo=TZ), "peer-a", 1000, 500),
+            row(datetime(2026, 8, 10, 1, 0, tzinfo=TZ), "peer-a", 200, 100),
+            row(datetime(2026, 8, 1, 1, 0, tzinfo=TZ), "peer-a", 400, 200),
+            row(datetime(2026, 8, 20, 1, 0, tzinfo=TZ), "peer-b", 50, 50),
+            row(datetime(2026, 9, 3, 16, 0, tzinfo=TZ), "peer-a", 999, 999),
+        ]
+
+        totals = online_period_totals(rows, now)
+
+        self.assertEqual(totals["peer-a"], (150, 1650, 1950))
+        self.assertEqual(totals["peer-b"], (0, 0, 100))
+
     def test_rate_series_is_chronological_and_zero_filled(self) -> None:
         now = datetime(2026, 9, 3, 10, 3, 30, tzinfo=TZ)
         rows = [
@@ -265,7 +282,7 @@ class ReportGeneratorTests(unittest.TestCase):
         ]
         cfg = {
             "TITLE": "Test AWGStat",
-            "VERSION": "2.1.0-test",
+            "VERSION": "2.1.1-test",
             "DAILY_REPORTS": "31",
             "WEEKLY_REPORTS": "12",
             "MONTHLY_REPORTS": "12",
@@ -356,6 +373,15 @@ class ReportGeneratorTests(unittest.TestCase):
             self.assertIn("TRAFFIC RATE", online)
             self.assertIn("Alice &lt;Admin&gt;", online)
             self.assertNotIn("Alice <Admin>", online)
+            self.assertLess(online.index("TODAY"), online.index("WG COUNTERS"))
+            self.assertLess(
+                online.index("THIS MONTH"),
+                online.index("WG COUNTERS"),
+            )
+            self.assertLess(
+                online.index("LAST 30 DAYS"),
+                online.index("WG COUNTERS"),
+            )
             self.assertIn("ONLINE USER REPORT", online_user)
             self.assertEqual(
                 len(list((output / "online" / slug).glob("traffic-*.svg"))),
@@ -422,6 +448,7 @@ class ReportGeneratorTests(unittest.TestCase):
                 "No peers in the current WireGuard snapshot",
                 empty_html,
             )
+            self.assertIn('colspan="14"', empty_html)
             self.assertIn("No traffic in the recent window", empty_html)
 
     def test_all_generated_local_links_resolve(self) -> None:

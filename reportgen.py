@@ -565,6 +565,30 @@ def recent_history_rows(
     ]
 
 
+def online_period_totals(
+    rows: Iterable[HistoryRow],
+    now: datetime,
+) -> dict[str, tuple[int, int, int]]:
+    """Return per-peer totals for today, this month, and the rolling 30 days."""
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = today_start.replace(day=1)
+    last_30_days_start = now - timedelta(days=30)
+    totals: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
+    for row in rows:
+        if row.timestamp > now:
+            continue
+        if row.timestamp >= today_start:
+            totals[row.peer][0] += row.total
+        if row.timestamp >= month_start:
+            totals[row.peer][1] += row.total
+        if row.timestamp >= last_30_days_start:
+            totals[row.peer][2] += row.total
+    return {
+        peer: (values[0], values[1], values[2])
+        for peer, values in totals.items()
+    }
+
+
 def build_rate_series(
     rows: Iterable[HistoryRow],
     now: datetime,
@@ -1345,12 +1369,14 @@ def render_online_summary(
 
 def render_online_peers_table(
     snapshot: OnlineSnapshot,
+    history_rows: list[HistoryRow],
     now: datetime,
     names: dict[str, str],
     active_minutes: int,
     stale_minutes: int,
 ) -> str:
     state = online_snapshot_status(snapshot, now, stale_minutes)
+    period_totals = online_period_totals(history_rows, now)
     order = {"TRAFFIC": 0, "ACTIVE": 1, "IDLE": 2, "STALE": 3, "NO SNAPSHOT": 4}
     peers = sorted(
         snapshot.peers,
@@ -1379,6 +1405,10 @@ def render_online_peers_table(
             stale_minutes,
         )
         slug = user_slug(peer.peer)
+        today, this_month, last_30_days = period_totals.get(
+            peer.peer,
+            (0, 0, 0),
+        )
         rate_cells = (
             f'<td class="data">{fmt_rate(peer.rx_rate)}</td>'
             f'<td class="data">{fmt_rate(peer.tx_rate)}</td>'
@@ -1396,11 +1426,14 @@ def render_online_peers_table(
             f'<td class="data2">{html.escape(handshake_text(peer, now))}</td>'
             f'<td class="data">{fmt_count(peer.interval)} s</td>'
             f"{rate_cells}"
+            f'<td class="data">{fmt_bytes(today)}</td>'
+            f'<td class="data">{fmt_bytes(this_month)}</td>'
+            f'<td class="data">{fmt_bytes(last_30_days)}</td>'
             f'<td class="data">{fmt_bytes(peer.wg_total)}</td>'
             "</tr>"
         )
     if not body:
-        body.append(empty_row(11, "No peers in the current WireGuard snapshot"))
+        body.append(empty_row(14, "No peers in the current WireGuard snapshot"))
     return (
         '<div class="report report-scroll"><table cellpadding="1" cellspacing="2">'
         '<thead><tr><th class="header_l">NUM</th><th class="header_l"></th>'
@@ -1408,9 +1441,11 @@ def render_online_peers_table(
         '<th class="header_l">USERIP</th><th class="header_l">LAST HANDSHAKE</th>'
         '<th class="header_l">SAMPLE</th><th class="header_l">RX/s</th>'
         '<th class="header_l">TX/s</th><th class="header_l">TOTAL/s</th>'
-        '<th class="header_l">WG COUNTERS</th></tr></thead>'
+        '<th class="header_l">TODAY</th><th class="header_l">THIS MONTH</th>'
+        '<th class="header_l">LAST 30 DAYS</th>'
+        '<th class="header_l" title="Since the WireGuard interface was created">WG COUNTERS</th></tr></thead>'
         f"<tbody>{''.join(body)}</tbody></table></div>"
-        '<div class="report-note">TRAFFIC means bytes changed in the latest sample; ACTIVE means a recent WireGuard handshake. Neither is a persistent session indicator.</div>'
+        '<div class="report-note">TODAY and THIS MONTH use the report timezone; LAST 30 DAYS is a rolling 30-day total. WG COUNTERS reset when the WireGuard interface is recreated. TRAFFIC means bytes changed in the latest sample; ACTIVE means a recent handshake.</div>'
     )
 
 
@@ -1463,6 +1498,7 @@ def render_online(
     version: str,
     updated: str,
     snapshot: OnlineSnapshot,
+    history_rows: list[HistoryRow],
     recent_rows: list[HistoryRow],
     names: dict[str, str],
     now: datetime,
@@ -1489,6 +1525,7 @@ def render_online(
         + '<div class="online-section">CURRENT PEERS</div>'
         + render_online_peers_table(
             snapshot,
+            history_rows,
             now,
             names,
             active_minutes,
@@ -1708,6 +1745,7 @@ def write_online_report(
             version,
             updated,
             snapshot,
+            rows,
             recent_rows,
             names,
             now,
