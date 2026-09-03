@@ -21,7 +21,7 @@ fix_crlf() {
     sed -i 's/\r$//' "${f}"
 }
 
-for f in install.sh backup.sh wgstats.sh htmlgen.py reportgen.py config cron/awgstat VERSION; do
+for f in install.sh backup.sh wgstats.sh awgstat-cycle.sh htmlgen.py reportgen.py config cron/awgstat VERSION; do
     fix_crlf "${SRC}/${f}"
 done
 
@@ -31,6 +31,7 @@ mkdir -p "${DEST}/logs" "${DEST}/www" "${DEST}/backups"
 
 # Application files (always refresh)
 install -m 0755 "${SRC}/wgstats.sh" "${DEST}/wgstats.sh"
+install -m 0755 "${SRC}/awgstat-cycle.sh" "${DEST}/awgstat-cycle.sh"
 install -m 0755 "${SRC}/htmlgen.py" "${DEST}/htmlgen.py"
 install -m 0644 "${SRC}/reportgen.py" "${DEST}/reportgen.py"
 install -m 0755 "${SRC}/backup.sh" "${DEST}/backup.sh"
@@ -63,6 +64,11 @@ else
     ensure_config_key "WEEKLY_REPORTS" "12"
     ensure_config_key "MONTHLY_REPORTS" "12"
     ensure_config_key "DETAIL_ROWS" "200"
+    ensure_config_key "ONLINE_STATE" '"${WORKDIR}/online.csv"'
+    ensure_config_key "ONLINE_WINDOW_MINUTES" "60"
+    ensure_config_key "ONLINE_ACTIVE_MINUTES" "3"
+    ensure_config_key "ONLINE_STALE_MINUTES" "3"
+    ensure_config_key "ONLINE_REFRESH_SECONDS" "60"
 fi
 
 # Local data — create only if absent, never overwrite
@@ -116,7 +122,6 @@ PY
 WEBROOT="$(awk -F= '/^WEBROOT=/{gsub(/"/,"",$2); print $2; exit}' "${DEST}/config" || true)"
 WEBROOT="${WEBROOT:-$WEBROOT_DEFAULT}"
 mkdir -p "${WEBROOT}"
-install -m 0644 "${SRC}/style.css" "${WEBROOT}/style.css"
 
 REPORT_TZ="$(awk -F= '/^REPORT_TZ=/{gsub(/"/,"",$2); print $2; exit}' "${DEST}/config" || true)"
 REPORT_TZ="${REPORT_TZ:-Europe/Moscow}"
@@ -125,7 +130,7 @@ chmod 644 "${CRON_DST}"
 
 # Force HTML rebuild after upgrade
 touch "${DEST}/.changed"
-python3 "${DEST}/htmlgen.py" --force || true
+python3 "${DEST}/htmlgen.py" --force
 
 echo "Done. AWGStat ${VERSION}"
 echo "  code:    ${DEST}"

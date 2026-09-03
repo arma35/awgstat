@@ -10,6 +10,7 @@ if [[ -z "${VERSION:-}" && -f "${SCRIPT_DIR}/VERSION" ]]; then
     VERSION="$(tr -d '[:space:]' <"${SCRIPT_DIR}/VERSION")"
 fi
 VERSION="${VERSION:-0.0.0}"
+ONLINE_STATE="${ONLINE_STATE:-${WORKDIR}/online.csv}"
 
 LOG_DIR="${WORKDIR}/logs"
 LOG_FILE="${LOG_DIR}/wgstats.log"
@@ -274,6 +275,9 @@ declare -A CURRENT_RX=()
 declare -A CURRENT_TX=()
 declare -A CURRENT_IP=()
 declare -A CURRENT_HS=()
+declare -A CURRENT_DRX=()
+declare -A CURRENT_DTX=()
+declare -A CURRENT_INTERVAL=()
 
 mapfile -t DUMP_LINES < <(get_dump)
 (( ${#DUMP_LINES[@]} > 0 )) || die "empty wg dump"
@@ -292,6 +296,9 @@ while IFS=$'\t' read -r peer _psk _endpoint allowed_ips handshake rx tx _keepali
     CURRENT_TX["${peer}"]="${tx}"
     CURRENT_IP["${peer}"]="${allowed_ips:-}"
     CURRENT_HS["${peer}"]="${handshake}"
+    CURRENT_DRX["${peer}"]=0
+    CURRENT_DTX["${peer}"]=0
+    CURRENT_INTERVAL["${peer}"]=0
 
     if [[ -z "${LAST_RX[${peer}]:-}" ]]; then
         continue
@@ -301,6 +308,9 @@ while IFS=$'\t' read -r peer _psk _endpoint allowed_ips handshake rx tx _keepali
     dtx="$(calc_delta "${tx}" "${LAST_TX[${peer}]}")"
     interval=$((NOW - LAST_TS[${peer}]))
     (( interval < 0 )) && interval=0
+    CURRENT_DRX["${peer}"]="${drx}"
+    CURRENT_DTX["${peer}"]="${dtx}"
+    CURRENT_INTERVAL["${peer}"]="${interval}"
 
     if (( drx == 0 && dtx == 0 )); then
         continue
@@ -320,6 +330,37 @@ if (( changed == 1 )); then
 fi
 rm -f "${tmp_history}"
 
+clean_online_field() {
+    local value="$1"
+    value="${value//$'\r'/ }"
+    value="${value//$'\n'/ }"
+    value="${value//;/,}"
+    printf '%s' "${value}"
+}
+
+write_online_state() {
+    local state_dir tmp peer name ip
+    state_dir="$(dirname "${ONLINE_STATE}")"
+    mkdir -p "${state_dir}"
+    tmp="$(mktemp "${state_dir}/.online.csv.XXXXXX")"
+    {
+        printf '#AWGSTAT-ONLINE:1;%s\n' "${NOW}"
+        echo "sample_timestamp;peer;name;ip;rx_bytes;tx_bytes;interval;handshake;rx_total;tx_total"
+        printf '%s\n' "${!CURRENT_RX[@]}" | LC_ALL=C sort | while IFS= read -r peer; do
+            [[ -n "${peer}" ]] || continue
+            name="$(clean_online_field "$(peer_name "${peer}")")"
+            ip="$(clean_online_field "${CURRENT_IP[${peer}]:-}")"
+            printf '%s;%s;%s;%s;%s;%s;%s;%s;%s;%s\n' \
+                "${NOW}" "${peer}" "${name}" "${ip}" \
+                "${CURRENT_DRX[${peer}]:-0}" "${CURRENT_DTX[${peer}]:-0}" \
+                "${CURRENT_INTERVAL[${peer}]:-0}" "${CURRENT_HS[${peer}]:-0}" \
+                "${CURRENT_RX[${peer}]:-0}" "${CURRENT_TX[${peer}]:-0}"
+        done
+    } >"${tmp}"
+    mv "${tmp}" "${ONLINE_STATE}"
+}
+
+write_online_state
 write_lastdb
 prune_history
 

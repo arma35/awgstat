@@ -265,6 +265,45 @@ a > img {
   border: none;
 }
 
+.online-summary th {
+  min-width: 130px;
+}
+
+.online-summary td {
+  min-width: 180px;
+}
+
+.online-section {
+  margin: 12px 0 5px;
+  color: green;
+  font-family: Tahoma, Verdana, Arial, sans-serif;
+  font-size: 10px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.online-status {
+  font-family: Tahoma, Verdana, Arial, sans-serif;
+  font-size: 9px;
+  font-weight: bold;
+}
+
+.online-status-traffic {
+  color: #008000;
+}
+
+.online-status-active {
+  color: #006699;
+}
+
+.online-status-idle {
+  color: #666666;
+}
+
+.online-status-stale {
+  color: #b00020;
+}
+
 @media (max-width: 700px) {
   .body {
     margin: 5px;

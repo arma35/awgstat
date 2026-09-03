@@ -8,6 +8,7 @@ source "${SCRIPT_DIR}/config"
 
 LOG_DIR="${WORKDIR}/logs"
 LOG_FILE="${LOG_DIR}/wgstats.log"
+ONLINE_STATE="${ONLINE_STATE:-${WORKDIR}/online.csv}"
 FORCE=0
 [[ "${1:-}" == "--force" ]] && FORCE=1
 
@@ -52,6 +53,7 @@ for f in \
     "${NAMES}" \
     "${HISTORY}" \
     "${LASTDB}" \
+    "${ONLINE_STATE}" \
     "${SCRIPT_DIR}/config" \
     "${SCRIPT_DIR}/VERSION"
 do

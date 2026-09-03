@@ -2,7 +2,7 @@
 # AWGStat configuration
 ########################################
 
-VERSION="2.0.1"
+VERSION="2.1.0"
 
 # Docker container with AmneziaWG
 CONTAINER="amnezia-awg2"
@@ -18,6 +18,7 @@ HISTORY="${WORKDIR}/history.csv"
 LASTDB="${WORKDIR}/last.db"
 NAMES="${WORKDIR}/names.map"
 CHANGED="${WORKDIR}/.changed"
+ONLINE_STATE="${WORKDIR}/online.csv"
 
 # Web output (served by your existing web server)
 WEBROOT="/var/www/html-20180/wgstats"
@@ -35,6 +36,12 @@ MONTHLY_REPORTS=12
 
 # Maximum raw traffic intervals on each user detail page (0 = hide)
 DETAIL_ROWS=200
+
+# ONLINE report: recent window, activity/freshness thresholds, browser refresh
+ONLINE_WINDOW_MINUTES=60
+ONLINE_ACTIVE_MINUTES=3
+ONLINE_STALE_MINUTES=3
+ONLINE_REFRESH_SECONDS=60
 
 # Backup period in days (backup.sh / cron at 03:00)
 BACKUP_DAYS=7

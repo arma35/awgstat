@@ -8,7 +8,10 @@ navigation model.
 
 Generated reports include:
 
-- a SARG-style report index with daily, weekly, monthly, and all-time archives;
+- a SARG-style report index with daily, weekly, monthly, all-time, and online
+  reports;
+- a minute-updated online report with collector freshness, current peer state,
+  RX/TX rates, recent rankings, and total/per-user time-series graphs;
 - classic `DDMonYYYY-DDMonYYYY` report directories;
 - a `Top users` table with `NUM`, date/time and graph links, `USERID`,
   `USERIP`, `CONNECT`, RX/TX, bytes, percentage, total, and average rows;
@@ -22,7 +25,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.0.1**
+See [`VERSION`](VERSION). Current: **2.1.0**
 
 ## Requirements
 
@@ -34,9 +37,9 @@ See [`VERSION`](VERSION). Current: **2.0.1**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.0.1/awgstat-2.0.1.tar.gz
-tar -xzf awgstat-2.0.1.tar.gz
-cd awgstat-2.0.1
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.1.0/awgstat-2.1.0.tar.gz
+tar -xzf awgstat-2.1.0.tar.gz
+cd awgstat-2.1.0
 sudo bash install.sh
 ```
 
@@ -45,7 +48,9 @@ Cron lives in **`/etc/cron.d/awgstat`** (system), not in `crontab -l`. Check wit
 Upgrade **does not** overwrite: `names.map`, `history.csv`, `last.db`, `backups/`, or your local `config` values (only bumps `VERSION` and adds new keys if missing).
 
 Default install path: `/opt/wgstats`  
-Cron: collect every minute, HTML every 5 minutes, forced HTML rebuild at 00:01 UTC+3, backup check daily at 03:00.
+Cron: serialized collection + online publication every minute, archive refresh
+every 5 minutes, forced HTML rebuild at 00:01 UTC+3, backup check daily at
+03:00.
 
 ## Config
 
@@ -62,6 +67,11 @@ Cron: collect every minute, HTML every 5 minutes, forced HTML rebuild at 00:01 U
 | `WEEKLY_REPORTS` | Number of weekly archive periods (`0` = all retained history) |
 | `MONTHLY_REPORTS` | Number of monthly archive periods (`0` = all retained history) |
 | `DETAIL_ROWS` | Maximum raw intervals on a user page (`0` = hide) |
+| `ONLINE_STATE` | Atomic current WireGuard snapshot written by the collector |
+| `ONLINE_WINDOW_MINUTES` | Recent traffic/rate graph window (default `60`) |
+| `ONLINE_ACTIVE_MINUTES` | Recent-handshake activity threshold (default `3`) |
+| `ONLINE_STALE_MINUTES` | Collector heartbeat stale threshold (default `3`) |
+| `ONLINE_REFRESH_SECONDS` | Browser auto-refresh interval (default `60`) |
 | `BACKUP_DAYS` | Minimum days between data backups |
 | `BACKUP_DIR` | Where `.tar.gz` backups are stored |
 | `LAST_BACKUP` | Timestamp file of last successful backup |
@@ -81,7 +91,21 @@ sudo /opt/wgstats/backup.sh          # only if BACKUP_DAYS elapsed
 sudo /opt/wgstats/backup.sh --force  # always
 ```
 
-Archive contents: `names.map`, `history.csv`, `last.db`, `config`, `VERSION`.
+Archive contents: `names.map`, `history.csv`, `last.db`, `online.csv`, `config`,
+`VERSION`.
+
+## Online report semantics
+
+`ONLINE REPORT` is rebuilt after the current collection cycle and auto-refreshes
+in the browser. `TRAFFIC` means byte counters changed in the latest sample;
+`ACTIVE` means a recent WireGuard handshake; `IDLE` means neither condition is
+true. These states are measurements, not persistent VPN sessions. If the
+collector heartbeat exceeds `ONLINE_STALE_MINUTES`, current rates are hidden
+and the report is marked `STALE`.
+
+Graphs and recent rankings use actual AWGStat traffic intervals from the last
+`ONLINE_WINDOW_MINUTES`. Missing minutes are rendered as zero. No site, URL, or
+application data is inferred.
 
 ## Generated report tree
 
@@ -110,17 +134,24 @@ monthly/
 └── ...same SARG report layout...
 total/
 └── ...one report for all retained history...
+online/
+├── index.html
+├── traffic-<timestamp>.svg
+└── <peer-id>/
+    ├── index.html
+    └── traffic-<timestamp>.svg
 ```
 
 The generator builds the complete tree in a temporary directory and publishes
 it only after all pages are ready. Files outside `index.html`, `style.css`,
-`images/`, `daily/`, `weekly/`, `monthly/`, and `total/` in `WEBROOT` are left
-untouched.
+`images/`, `daily/`, `weekly/`, `monthly/`, `total/`, and `online/` in
+`WEBROOT` are left untouched.
 
 ## Layout
 
 ```
 wgstats.sh           # collector
+awgstat-cycle.sh     # serialized minute collection + report publication
 htmlgen.py           # HTML generator entry point
 reportgen.py         # SARG-style report implementation
 backup.sh            # data backup

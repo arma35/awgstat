@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import html
-import os
 import shutil
 import sys
 import tempfile
@@ -42,7 +41,7 @@ KIND_DEFAULT_LIMITS = {
     "weekly": 12,
     "monthly": 12,
 }
-OWNED_DIRECTORIES = (*REPORT_KINDS, "images")
+OWNED_DIRECTORIES = (*REPORT_KINDS, "online", "images")
 OWNED_FILES = ("index.html", "style.css")
 MONTH_ABBREVIATIONS = (
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -64,6 +63,46 @@ class HistoryRow:
     @property
     def total(self) -> int:
         return self.rx_bytes + self.tx_bytes
+
+
+@dataclass(frozen=True)
+class OnlinePeer:
+    timestamp: datetime
+    peer: str
+    name: str
+    ip: str
+    rx_bytes: int
+    tx_bytes: int
+    interval: int
+    handshake: int
+    rx_total: int
+    tx_total: int
+
+    @property
+    def total(self) -> int:
+        return self.rx_bytes + self.tx_bytes
+
+    @property
+    def rx_rate(self) -> float:
+        return self.rx_bytes / self.interval if self.interval > 0 else 0.0
+
+    @property
+    def tx_rate(self) -> float:
+        return self.tx_bytes / self.interval if self.interval > 0 else 0.0
+
+    @property
+    def total_rate(self) -> float:
+        return self.rx_rate + self.tx_rate
+
+    @property
+    def wg_total(self) -> int:
+        return self.rx_total + self.tx_total
+
+
+@dataclass
+class OnlineSnapshot:
+    timestamp: datetime | None = None
+    peers: list[OnlinePeer] = field(default_factory=list)
 
 
 @dataclass
@@ -197,6 +236,26 @@ def fmt_count(value: int) -> str:
     return f"{value:,}".replace(",", " ")
 
 
+def fmt_rate(value: float) -> str:
+    value = max(value, 0.0)
+    if 0 < value < 1:
+        return f"{value:.1f} B/s"
+    return f"{fmt_bytes(round(value))}/s"
+
+
+def fmt_age(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    value = max(0, int(seconds))
+    if value < 60:
+        return f"{value} s"
+    minutes, seconds = divmod(value, 60)
+    if minutes < 60:
+        return f"{minutes} min {seconds} s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} h {minutes} min"
+
+
 def fmt_datetime(value: datetime | None) -> str:
     return value.strftime("%d/%m/%Y-%H:%M") if value else "—"
 
@@ -293,6 +352,59 @@ def read_history(path: Path, tz=timezone.utc) -> list[HistoryRow]:
                 )
             )
     return rows
+
+
+def read_online_state(path: Path, tz=timezone.utc) -> OnlineSnapshot:
+    if not path.exists():
+        return OnlineSnapshot()
+
+    snapshot_time: datetime | None = None
+    peers: dict[str, OnlinePeer] = {}
+    with path.open(encoding="utf-8", newline="") as handle:
+        for line in handle:
+            if line.startswith("#AWGSTAT-ONLINE:"):
+                marker = line.rstrip("\r\n").split(";", 1)
+                if len(marker) == 2:
+                    try:
+                        snapshot_time = datetime.fromtimestamp(
+                            int(marker[1]),
+                            tz=timezone.utc,
+                        ).astimezone(tz)
+                    except (ValueError, OSError, OverflowError):
+                        snapshot_time = None
+                continue
+            if line.startswith("sample_timestamp;") or not line.strip():
+                continue
+            parts = line.rstrip("\r\n").split(";")
+            if len(parts) < 10:
+                continue
+            try:
+                timestamp = datetime.fromtimestamp(
+                    int(parts[0]),
+                    tz=timezone.utc,
+                ).astimezone(tz)
+            except (ValueError, OSError, OverflowError):
+                continue
+            peer = parts[1].strip()
+            if not peer:
+                continue
+            peers[peer] = OnlinePeer(
+                timestamp=timestamp,
+                peer=peer,
+                name=parts[2].strip(),
+                ip=parts[3].strip(),
+                rx_bytes=parse_nonnegative_int(parts[4]),
+                tx_bytes=parse_nonnegative_int(parts[5]),
+                interval=parse_nonnegative_int(parts[6]),
+                handshake=parse_nonnegative_int(parts[7]),
+                rx_total=parse_nonnegative_int(parts[8]),
+                tx_total=parse_nonnegative_int(parts[9]),
+            )
+
+    ordered = sorted(peers.values(), key=lambda item: item.peer)
+    if snapshot_time is None and ordered:
+        snapshot_time = max(item.timestamp for item in ordered)
+    return OnlineSnapshot(timestamp=snapshot_time, peers=ordered)
 
 
 def aggregate_rows(rows: Iterable[HistoryRow]) -> dict[str, TrafficSummary]:
@@ -440,6 +552,99 @@ def hourly_summaries(rows: list[HistoryRow]) -> list[tuple[str, TrafficSummary]]
     return result
 
 
+def recent_history_rows(
+    rows: Iterable[HistoryRow],
+    now: datetime,
+    window_minutes: int,
+) -> list[HistoryRow]:
+    cutoff = now - timedelta(minutes=max(window_minutes, 1))
+    return [
+        row
+        for row in rows
+        if cutoff <= row.timestamp <= now
+    ]
+
+
+def build_rate_series(
+    rows: Iterable[HistoryRow],
+    now: datetime,
+    window_minutes: int,
+) -> list[tuple[datetime, float, float]]:
+    count = max(window_minutes, 1)
+    end = now.replace(second=0, microsecond=0)
+    start = end - timedelta(minutes=count - 1)
+    rates: dict[datetime, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for row in rows:
+        minute = row.timestamp.replace(second=0, microsecond=0)
+        if minute < start or minute > end:
+            continue
+        interval = row.interval if row.interval > 0 else 60
+        rates[minute][0] += row.rx_bytes / interval
+        rates[minute][1] += row.tx_bytes / interval
+    return [
+        (
+            start + timedelta(minutes=index),
+            rates[start + timedelta(minutes=index)][0],
+            rates[start + timedelta(minutes=index)][1],
+        )
+        for index in range(count)
+    ]
+
+
+def snapshot_age(snapshot: OnlineSnapshot, now: datetime) -> float | None:
+    if snapshot.timestamp is None:
+        return None
+    return max(0.0, (now - snapshot.timestamp).total_seconds())
+
+
+def online_snapshot_status(
+    snapshot: OnlineSnapshot,
+    now: datetime,
+    stale_minutes: int,
+) -> str:
+    age = snapshot_age(snapshot, now)
+    if age is None:
+        return "NO SNAPSHOT"
+    if age > max(stale_minutes, 1) * 60:
+        return "STALE"
+    return "FRESH"
+
+
+def handshake_age(peer: OnlinePeer, now: datetime) -> float | None:
+    if peer.handshake <= 0:
+        return None
+    try:
+        handshake = datetime.fromtimestamp(
+            peer.handshake,
+            tz=timezone.utc,
+        ).astimezone(now.tzinfo)
+    except (ValueError, OSError, OverflowError):
+        return None
+    return max(0.0, (now - handshake).total_seconds())
+
+
+def online_peer_status(
+    peer: OnlinePeer,
+    snapshot: OnlineSnapshot,
+    now: datetime,
+    active_minutes: int,
+    stale_minutes: int,
+) -> str:
+    state = online_snapshot_status(snapshot, now, stale_minutes)
+    if state != "FRESH":
+        return state
+    if peer.total > 0:
+        return "TRAFFIC"
+    age = handshake_age(peer, now)
+    if age is not None and age <= max(active_minutes, 1) * 60:
+        return "ACTIVE"
+    return "IDLE"
+
+
+def resolved_online_name(peer: OnlinePeer, names: dict[str, str]) -> str:
+    return lookup_name(names, peer.peer, peer.name) or "неизвестный"
+
+
 def nav_markup(root_prefix: str) -> str:
     links = [
         (f"{root_prefix}index.html", "REPORT INDEX"),
@@ -447,6 +652,7 @@ def nav_markup(root_prefix: str) -> str:
         (f"{root_prefix}weekly/index.html", "WEEKLY"),
         (f"{root_prefix}monthly/index.html", "MONTHLY"),
         (f"{root_prefix}total/index.html", "ALL TIME"),
+        (f"{root_prefix}online/index.html", "ONLINE"),
     ]
     return (
         '<div class="navigation">'
@@ -466,17 +672,24 @@ def render_document(
     root_prefix: str,
     header_rows: list[tuple[str, bool]],
     content: str,
+    refresh_seconds: int = 0,
 ) -> str:
     rows = [f'<tr><th class="title_c">{html.escape(site_title)}</th></tr>']
     for text, strong in header_rows:
         tag = "th" if strong else "td"
         rows.append(f'<tr><{tag} class="header_c">{html.escape(text)}</{tag}></tr>')
+    refresh = ""
+    if refresh_seconds > 0:
+        refresh = (
+            f'  <meta http-equiv="refresh" content="{refresh_seconds}">\n'
+            '  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">\n'
+        )
     return f"""<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
 <html lang="ru">
 <head>
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
   <meta name="generator" content="AWGStat {html.escape(version)}">
-  <title>{html.escape(page_title)}</title>
+{refresh}  <title>{html.escape(page_title)}</title>
   <link rel="stylesheet" href="{html.escape(root_prefix, quote=True)}style.css" type="text/css">
 </head>
 <body class="body">
@@ -501,6 +714,13 @@ def render_root(
     version: str,
     updated: str,
     periods: dict[str, list[PeriodReport]],
+    snapshot: OnlineSnapshot,
+    history_rows: list[HistoryRow],
+    now: datetime,
+    window_minutes: int,
+    active_minutes: int,
+    stale_minutes: int,
+    refresh_seconds: int,
 ) -> str:
     rows: list[str] = []
     for kind in REPORT_KINDS:
@@ -516,6 +736,36 @@ def render_root(
             f'<td class="data">{fmt_bytes(average)}</td>'
             "</tr>"
         )
+    recent = recent_history_rows(history_rows, now, window_minutes)
+    recent_users = aggregate_rows(recent)
+    recent_total = sum(item.total for item in recent)
+    state = online_snapshot_status(snapshot, now, stale_minutes)
+    statuses = [
+        online_peer_status(
+            peer,
+            snapshot,
+            now,
+            active_minutes,
+            stale_minutes,
+        )
+        for peer in snapshot.peers
+    ]
+    active_count = sum(status in {"TRAFFIC", "ACTIVE"} for status in statuses)
+    current_rate = (
+        sum(peer.total_rate for peer in snapshot.peers)
+        if state == "FRESH"
+        else 0.0
+    )
+    rows.append(
+        "<tr>"
+        '<td class="data2"><a href="online/index.html">ONLINE REPORT</a></td>'
+        '<td class="data">LIVE</td>'
+        f'<td class="data2">Last {window_minutes} min · {html.escape(state)}</td>'
+        f'<td class="data">{fmt_count(active_count)} / {fmt_count(len(recent_users))}</td>'
+        f'<td class="data">{fmt_bytes(recent_total)}</td>'
+        f'<td class="data">{fmt_rate(current_rate)}</td>'
+        "</tr>"
+    )
     content = (
         '<div class="index"><table cellpadding="1" cellspacing="2">'
         '<thead><tr><th class="header_l">REPORT TYPE</th>'
@@ -523,8 +773,9 @@ def render_root(
         '<th class="header_l">LATEST PERIOD</th>'
         '<th class="header_l">USERS</th>'
         '<th class="header_l">BYTES</th>'
-        '<th class="header_l">AVERAGE</th></tr></thead>'
+        '<th class="header_l">AVERAGE / RATE</th></tr></thead>'
         f"<tbody>{''.join(rows)}</tbody></table></div>"
+        '<div class="report-note">ONLINE users: active now / seen in the recent window.</div>'
     )
     return render_document(
         site_title,
@@ -534,6 +785,7 @@ def render_root(
         "",
         [("AWGStat reports", True)],
         content,
+        refresh_seconds,
     )
 
 
@@ -938,6 +1190,425 @@ def render_user_graph(
     )
 
 
+def status_class(status: str) -> str:
+    if status in {"FRESH", "TRAFFIC"}:
+        return "online-status-traffic"
+    if status == "ACTIVE":
+        return "online-status-active"
+    if status in {"STALE", "NO SNAPSHOT"}:
+        return "online-status-stale"
+    return "online-status-idle"
+
+
+def status_markup(status: str) -> str:
+    return (
+        f'<span class="online-status {status_class(status)}">'
+        f"{html.escape(status)}</span>"
+    )
+
+
+def handshake_text(peer: OnlinePeer, now: datetime) -> str:
+    age = handshake_age(peer, now)
+    if age is None:
+        return "never"
+    handshake = datetime.fromtimestamp(
+        peer.handshake,
+        tz=timezone.utc,
+    ).astimezone(now.tzinfo)
+    return f"{fmt_datetime(handshake)} ({fmt_age(age)} ago)"
+
+
+def render_online_graph_svg(
+    rows: list[HistoryRow],
+    now: datetime,
+    window_minutes: int,
+    title: str,
+) -> str:
+    series = build_rate_series(rows, now, window_minutes)
+    width, height = 900, 360
+    left, top, right, bottom = 76, 38, 25, 62
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+    maximum = max(
+        (max(rx_rate, tx_rate) for _, rx_rate, tx_rate in series),
+        default=0.0,
+    )
+    maximum = max(maximum, 1.0)
+
+    def point(index: int, value: float) -> tuple[float, float]:
+        divisor = max(len(series) - 1, 1)
+        x = left + plot_width * index / divisor
+        y = top + plot_height - value * plot_height / maximum
+        return x, y
+
+    rx_points = " ".join(
+        f"{x:.1f},{y:.1f}"
+        for index, (_, rx_rate, _) in enumerate(series)
+        for x, y in [point(index, rx_rate)]
+    )
+    tx_points = " ".join(
+        f"{x:.1f},{y:.1f}"
+        for index, (_, _, tx_rate) in enumerate(series)
+        for x, y in [point(index, tx_rate)]
+    )
+    grid: list[str] = []
+    for step in range(6):
+        y = top + plot_height * step / 5
+        value = maximum * (5 - step) / 5
+        grid.append(
+            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="#d8d8d8"/>'
+            f'<text x="{left - 8}" y="{y + 3:.1f}" text-anchor="end">{html.escape(fmt_rate(value))}</text>'
+        )
+
+    labels: list[str] = []
+    label_step = max(1, len(series) // 6)
+    label_indexes = set(range(0, len(series), label_step))
+    if series:
+        label_indexes.add(len(series) - 1)
+    for index in sorted(label_indexes):
+        timestamp = series[index][0]
+        x, _ = point(index, 0)
+        labels.append(
+            f'<text x="{x:.1f}" y="{height - 35}" text-anchor="middle">'
+            f"{timestamp:%H:%M}</text>"
+        )
+
+    safe_title = html.escape(title)
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="{safe_title}">
+<title>{safe_title}</title>
+<rect width="100%" height="100%" fill="white"/>
+<g font-family="Tahoma,Verdana,Arial,sans-serif" font-size="9" fill="#000">
+<text x="{left}" y="17" font-weight="bold">{safe_title}</text>
+{''.join(grid)}
+<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_height}" stroke="#333"/>
+<line x1="{left}" y1="{top + plot_height}" x2="{width - right}" y2="{top + plot_height}" stroke="#333"/>
+<polyline points="{rx_points}" fill="none" stroke="#436EEE" stroke-width="2"/>
+<polyline points="{tx_points}" fill="none" stroke="#FF8C00" stroke-width="2"/>
+{''.join(labels)}
+<rect x="{width - 150}" y="10" width="10" height="10" fill="#436EEE"/><text x="{width - 135}" y="19">RX/s</text>
+<rect x="{width - 85}" y="10" width="10" height="10" fill="#FF8C00"/><text x="{width - 70}" y="19">TX/s</text>
+</g>
+</svg>
+"""
+
+
+def render_online_summary(
+    snapshot: OnlineSnapshot,
+    recent_rows: list[HistoryRow],
+    now: datetime,
+    active_minutes: int,
+    stale_minutes: int,
+    refresh_seconds: int,
+) -> str:
+    state = online_snapshot_status(snapshot, now, stale_minutes)
+    age = snapshot_age(snapshot, now)
+    statuses = [
+        online_peer_status(
+            peer,
+            snapshot,
+            now,
+            active_minutes,
+            stale_minutes,
+        )
+        for peer in snapshot.peers
+    ]
+    active_count = sum(status in {"TRAFFIC", "ACTIVE"} for status in statuses)
+    recent_total = sum(row.total for row in recent_rows)
+    recent_users = len(aggregate_rows(recent_rows))
+    last_traffic = max(
+        (row.timestamp for row in recent_rows),
+        default=None,
+    )
+    if state == "FRESH":
+        rx_rate = fmt_rate(sum(peer.rx_rate for peer in snapshot.peers))
+        tx_rate = fmt_rate(sum(peer.tx_rate for peer in snapshot.peers))
+        total_rate = fmt_rate(sum(peer.total_rate for peer in snapshot.peers))
+    else:
+        rx_rate = tx_rate = total_rate = "—"
+    rows = (
+        f'<tr><th class="header_l">COLLECTOR STATUS</th><td class="data2">{status_markup(state)}</td></tr>'
+        f'<tr><th class="header_l">SNAPSHOT</th><td class="data2">{html.escape(fmt_datetime(snapshot.timestamp))}</td></tr>'
+        f'<tr><th class="header_l">SNAPSHOT AGE</th><td class="data2">{html.escape(fmt_age(age))}</td></tr>'
+        f'<tr><th class="header_l">AUTO REFRESH</th><td class="data2">{refresh_seconds} s</td></tr>'
+        f'<tr><th class="header_l">ACTIVE PEERS</th><td class="data2">{active_count} / {len(snapshot.peers)}</td></tr>'
+        f'<tr><th class="header_l">RECENT USERS</th><td class="data2">{recent_users}</td></tr>'
+        f'<tr><th class="header_l">CURRENT RX / TX</th><td class="data2">{rx_rate} / {tx_rate}</td></tr>'
+        f'<tr><th class="header_l">CURRENT TOTAL RATE</th><td class="data2">{total_rate}</td></tr>'
+        f'<tr><th class="header_l">WINDOW TRAFFIC</th><td class="data2">{fmt_bytes(recent_total)}</td></tr>'
+        f'<tr><th class="header_l">LAST TRAFFIC</th><td class="data2">{html.escape(fmt_datetime(last_traffic))}</td></tr>'
+    )
+    return (
+        '<div class="report"><table class="online-summary" cellpadding="2" cellspacing="1">'
+        f"<tbody>{rows}</tbody></table></div>"
+    )
+
+
+def render_online_peers_table(
+    snapshot: OnlineSnapshot,
+    now: datetime,
+    names: dict[str, str],
+    active_minutes: int,
+    stale_minutes: int,
+) -> str:
+    state = online_snapshot_status(snapshot, now, stale_minutes)
+    order = {"TRAFFIC": 0, "ACTIVE": 1, "IDLE": 2, "STALE": 3, "NO SNAPSHOT": 4}
+    peers = sorted(
+        snapshot.peers,
+        key=lambda peer: (
+            order.get(
+                online_peer_status(
+                    peer,
+                    snapshot,
+                    now,
+                    active_minutes,
+                    stale_minutes,
+                ),
+                9,
+            ),
+            -peer.total_rate,
+            resolved_online_name(peer, names).casefold(),
+        ),
+    )
+    body: list[str] = []
+    for rank, peer in enumerate(peers, start=1):
+        status = online_peer_status(
+            peer,
+            snapshot,
+            now,
+            active_minutes,
+            stale_minutes,
+        )
+        slug = user_slug(peer.peer)
+        rate_cells = (
+            f'<td class="data">{fmt_rate(peer.rx_rate)}</td>'
+            f'<td class="data">{fmt_rate(peer.tx_rate)}</td>'
+            f'<td class="data">{fmt_rate(peer.total_rate)}</td>'
+            if state == "FRESH"
+            else '<td class="data">—</td><td class="data">—</td><td class="data">—</td>'
+        )
+        body.append(
+            "<tr>"
+            f'<td class="data">{rank}</td>'
+            f'<td class="data2"><a href="{slug}/index.html"><img class="report-icon" src="../images/graph.svg" title="Live graphic report" alt="G"></a></td>'
+            f'<td class="data2">{status_markup(status)}</td>'
+            f'<td class="data2"><a href="{slug}/index.html">{html.escape(resolved_online_name(peer, names))}</a></td>'
+            f'<td class="data2">{html.escape(clean_ip(peer.ip) or "—")}</td>'
+            f'<td class="data2">{html.escape(handshake_text(peer, now))}</td>'
+            f'<td class="data">{fmt_count(peer.interval)} s</td>'
+            f"{rate_cells}"
+            f'<td class="data">{fmt_bytes(peer.wg_total)}</td>'
+            "</tr>"
+        )
+    if not body:
+        body.append(empty_row(11, "No peers in the current WireGuard snapshot"))
+    return (
+        '<div class="report report-scroll"><table cellpadding="1" cellspacing="2">'
+        '<thead><tr><th class="header_l">NUM</th><th class="header_l"></th>'
+        '<th class="header_l">STATUS</th><th class="header_l">USERID</th>'
+        '<th class="header_l">USERIP</th><th class="header_l">LAST HANDSHAKE</th>'
+        '<th class="header_l">SAMPLE</th><th class="header_l">RX/s</th>'
+        '<th class="header_l">TX/s</th><th class="header_l">TOTAL/s</th>'
+        '<th class="header_l">WG COUNTERS</th></tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table></div>"
+        '<div class="report-note">TRAFFIC means bytes changed in the latest sample; ACTIVE means a recent WireGuard handshake. Neither is a persistent session indicator.</div>'
+    )
+
+
+def render_online_ranking(
+    recent_rows: list[HistoryRow],
+    names: dict[str, str],
+    window_minutes: int,
+) -> str:
+    summaries = aggregate_rows(recent_rows)
+    ordered = sorted(
+        summaries.values(),
+        key=lambda item: (-item.total, resolved_name(item, names).casefold()),
+    )
+    total = sum(item.total for item in ordered)
+    body: list[str] = []
+    for rank, summary in enumerate(ordered, start=1):
+        slug = user_slug(summary.peer)
+        average_rate = summary.total / max(window_minutes * 60, 1)
+        body.append(
+            "<tr>"
+            f'<td class="data">{rank}</td>'
+            f'<td class="data2"><a href="{slug}/index.html"><img class="report-icon" src="../images/graph.svg" title="Live graphic report" alt="G"></a></td>'
+            f'<td class="data2"><a href="{slug}/index.html">{html.escape(resolved_name(summary, names))}</a></td>'
+            f'<td class="data2">{html.escape(summary.ip or "—")}</td>'
+            f'<td class="data">{fmt_count(summary.samples)}</td>'
+            f'<td class="data">{fmt_datetime(summary.last_seen)}</td>'
+            f'<td class="data">{fmt_bytes(summary.rx_bytes)}</td>'
+            f'<td class="data">{fmt_bytes(summary.tx_bytes)}</td>'
+            f'<td class="data">{fmt_bytes(summary.total)}</td>'
+            f'<td class="data">{fmt_rate(average_rate)}</td>'
+            f'<td class="data">{fmt_percent(summary.total, total)}</td>'
+            "</tr>"
+        )
+    if not body:
+        body.append(empty_row(11, "No traffic in the recent window"))
+    return (
+        '<div class="report report-scroll"><table cellpadding="1" cellspacing="2">'
+        '<thead><tr><th class="header_l">NUM</th><th class="header_l"></th>'
+        '<th class="header_l">USERID</th><th class="header_l">USERIP</th>'
+        '<th class="header_l">SAMPLES</th><th class="header_l">LAST TRAFFIC</th>'
+        '<th class="header_l">RX</th><th class="header_l">TX</th>'
+        '<th class="header_l">BYTES</th><th class="header_l">AVG RATE</th>'
+        '<th class="header_l">%BYTES</th></tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+def render_online(
+    site_title: str,
+    version: str,
+    updated: str,
+    snapshot: OnlineSnapshot,
+    recent_rows: list[HistoryRow],
+    names: dict[str, str],
+    now: datetime,
+    window_minutes: int,
+    active_minutes: int,
+    stale_minutes: int,
+    refresh_seconds: int,
+    graph_filename: str,
+) -> str:
+    graph = (
+        '<div class="report graph-report"><table cellpadding="0" cellspacing="2">'
+        f'<tr><td><img src="{html.escape(graph_filename, quote=True)}" alt="Recent RX/TX rate graph"></td></tr>'
+        "</table></div>"
+    )
+    content = (
+        render_online_summary(
+            snapshot,
+            recent_rows,
+            now,
+            active_minutes,
+            stale_minutes,
+            refresh_seconds,
+        )
+        + '<div class="online-section">CURRENT PEERS</div>'
+        + render_online_peers_table(
+            snapshot,
+            now,
+            names,
+            active_minutes,
+            stale_minutes,
+        )
+        + f'<div class="online-section">TRAFFIC RATE — LAST {window_minutes} MINUTES</div>'
+        + graph
+        + f'<div class="online-section">TOP TRAFFIC — LAST {window_minutes} MINUTES</div>'
+        + render_online_ranking(recent_rows, names, window_minutes)
+        + '<div class="report-note">Rates and rankings use AWGStat sampling intervals. AmneziaWG does not expose sites, URLs, or application sessions.</div>'
+    )
+    return render_document(
+        site_title,
+        "Online traffic report",
+        version,
+        updated,
+        "../",
+        [
+            (f"Window: last {window_minutes} minutes", False),
+            ("ONLINE REPORT", True),
+        ],
+        content,
+        refresh_seconds,
+    )
+
+
+def render_online_user(
+    site_title: str,
+    version: str,
+    updated: str,
+    peer_id: str,
+    snapshot: OnlineSnapshot,
+    peer_rows: list[HistoryRow],
+    names: dict[str, str],
+    now: datetime,
+    window_minutes: int,
+    active_minutes: int,
+    stale_minutes: int,
+    refresh_seconds: int,
+    detail_limit: int,
+    graph_filename: str,
+) -> str:
+    current = next(
+        (peer for peer in snapshot.peers if peer.peer == peer_id),
+        None,
+    )
+    summary = aggregate_rows(peer_rows).get(
+        peer_id,
+        TrafficSummary(peer=peer_id),
+    )
+    fallback_name = current.name if current else summary.name
+    name = lookup_name(names, peer_id, fallback_name) or "неизвестный"
+    if current is None:
+        state = online_snapshot_status(snapshot, now, stale_minutes)
+        status = state if state != "FRESH" else "NOT IN SNAPSHOT"
+        ip = summary.ip or "—"
+        sample = "—"
+        handshake = "—"
+        rx_rate = tx_rate = total_rate = wg_total = "—"
+    else:
+        status = online_peer_status(
+            current,
+            snapshot,
+            now,
+            active_minutes,
+            stale_minutes,
+        )
+        ip = clean_ip(current.ip) or summary.ip or "—"
+        sample = f"{current.interval} s"
+        handshake = handshake_text(current, now)
+        if online_snapshot_status(snapshot, now, stale_minutes) == "FRESH":
+            rx_rate = fmt_rate(current.rx_rate)
+            tx_rate = fmt_rate(current.tx_rate)
+            total_rate = fmt_rate(current.total_rate)
+        else:
+            rx_rate = tx_rate = total_rate = "—"
+        wg_total = fmt_bytes(current.wg_total)
+
+    summary_rows = (
+        f'<tr><th class="header_l">STATUS</th><td class="data2">{status_markup(status)}</td></tr>'
+        f'<tr><th class="header_l">USERID</th><td class="data2">{html.escape(name)}</td></tr>'
+        f'<tr><th class="header_l">USERIP</th><td class="data2">{html.escape(ip)}</td></tr>'
+        f'<tr><th class="header_l">SNAPSHOT</th><td class="data2">{html.escape(fmt_datetime(snapshot.timestamp))}</td></tr>'
+        f'<tr><th class="header_l">LAST HANDSHAKE</th><td class="data2">{html.escape(handshake)}</td></tr>'
+        f'<tr><th class="header_l">SAMPLE</th><td class="data2">{html.escape(sample)}</td></tr>'
+        f'<tr><th class="header_l">CURRENT RX / TX</th><td class="data2">{rx_rate} / {tx_rate}</td></tr>'
+        f'<tr><th class="header_l">CURRENT TOTAL RATE</th><td class="data2">{total_rate}</td></tr>'
+        f'<tr><th class="header_l">WINDOW RX / TX</th><td class="data2">{fmt_bytes(summary.rx_bytes)} / {fmt_bytes(summary.tx_bytes)}</td></tr>'
+        f'<tr><th class="header_l">WINDOW TOTAL</th><td class="data2">{fmt_bytes(summary.total)}</td></tr>'
+        f'<tr><th class="header_l">WG COUNTERS</th><td class="data2">{wg_total}</td></tr>'
+    )
+    content = (
+        '<div class="report"><table cellpadding="2" cellspacing="1">'
+        '<tr><td class="link"><a href="../index.html">ONLINE REPORT</a></td></tr>'
+        "</table></div>"
+        '<div class="report"><table class="online-summary" cellpadding="2" cellspacing="1">'
+        f"<tbody>{summary_rows}</tbody></table></div>"
+        '<div class="online-section">TRAFFIC RATE</div>'
+        '<div class="report graph-report"><table cellpadding="0" cellspacing="2">'
+        f'<tr><td><img src="{html.escape(graph_filename, quote=True)}" alt="User RX/TX rate graph"></td></tr>'
+        "</table></div>"
+        '<div class="online-section">RECENT TRAFFIC INTERVALS</div>'
+        + render_user_rows(summary, peer_rows, detail_limit)
+    )
+    return render_document(
+        site_title,
+        "Online user report",
+        version,
+        updated,
+        "../../",
+        [
+            (f"Window: last {window_minutes} minutes", False),
+            (f"User: {name}", False),
+            ("ONLINE USER REPORT", True),
+        ],
+        content,
+        refresh_seconds,
+    )
+
+
 AWGSTAT_LOGO = """<svg xmlns="http://www.w3.org/2000/svg" width="112" height="36" viewBox="0 0 112 36">
 <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#eaffff"/><stop offset=".45" stop-color="#16b8d4"/><stop offset="1" stop-color="#006699"/></linearGradient></defs>
 <rect width="112" height="36" fill="white"/>
@@ -962,18 +1633,44 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
-def generate_site(
-    output: Path,
+def online_settings(cfg: dict[str, str]) -> tuple[int, int, int, int]:
+    return (
+        config_int(
+            cfg,
+            "ONLINE_WINDOW_MINUTES",
+            60,
+            minimum=5,
+            maximum=1440,
+        ),
+        config_int(
+            cfg,
+            "ONLINE_ACTIVE_MINUTES",
+            3,
+            minimum=1,
+            maximum=60,
+        ),
+        config_int(
+            cfg,
+            "ONLINE_STALE_MINUTES",
+            3,
+            minimum=1,
+            maximum=60,
+        ),
+        config_int(
+            cfg,
+            "ONLINE_REFRESH_SECONDS",
+            60,
+            minimum=15,
+            maximum=300,
+        ),
+    )
+
+
+def build_report_periods(
     cfg: dict[str, str],
     rows: list[HistoryRow],
-    names: dict[str, str],
     now: datetime,
-) -> dict[str, int]:
-    site_title = cfg.get("TITLE", "AWGStat")
-    version = read_version(cfg)
-    updated = now.strftime("%d/%m/%Y %H:%M")
-    detail_limit = config_int(cfg, "DETAIL_ROWS", 200, maximum=5000)
-
+) -> dict[str, list[PeriodReport]]:
     periods: dict[str, list[PeriodReport]] = {}
     for kind in CALENDAR_REPORT_KINDS:
         limit = config_int(
@@ -984,16 +1681,201 @@ def generate_site(
         )
         periods[kind] = build_periods(rows, kind, now, limit)
     periods["total"] = build_all_time_report(rows, now)
+    return periods
+
+
+def write_online_report(
+    output: Path,
+    cfg: dict[str, str],
+    rows: list[HistoryRow],
+    names: dict[str, str],
+    snapshot: OnlineSnapshot,
+    now: datetime,
+    site_title: str,
+    version: str,
+    updated: str,
+) -> int:
+    window_minutes, active_minutes, stale_minutes, refresh_seconds = (
+        online_settings(cfg)
+    )
+    detail_limit = config_int(cfg, "DETAIL_ROWS", 200, maximum=5000)
+    recent_rows = recent_history_rows(rows, now, window_minutes)
+    graph_filename = f"traffic-{int(now.timestamp())}.svg"
+    write_text(
+        output / "online" / "index.html",
+        render_online(
+            site_title,
+            version,
+            updated,
+            snapshot,
+            recent_rows,
+            names,
+            now,
+            window_minutes,
+            active_minutes,
+            stale_minutes,
+            refresh_seconds,
+            graph_filename,
+        ),
+    )
+    write_text(
+        output / "online" / graph_filename,
+        render_online_graph_svg(
+            recent_rows,
+            now,
+            window_minutes,
+            f"Total traffic rate — last {window_minutes} minutes",
+        ),
+    )
+
+    rows_by_peer: dict[str, list[HistoryRow]] = defaultdict(list)
+    for row in recent_rows:
+        rows_by_peer[row.peer].append(row)
+    peer_ids = {peer.peer for peer in snapshot.peers}
+    peer_ids.update(rows_by_peer)
+    for peer_id in sorted(peer_ids):
+        peer_rows = rows_by_peer[peer_id]
+        slug = user_slug(peer_id)
+        current = next(
+            (peer for peer in snapshot.peers if peer.peer == peer_id),
+            None,
+        )
+        fallback = current.name if current else ""
+        summary = aggregate_rows(peer_rows).get(peer_id)
+        if summary is not None and not fallback:
+            fallback = summary.name
+        name = lookup_name(names, peer_id, fallback) or "неизвестный"
+        write_text(
+            output / "online" / slug / "index.html",
+            render_online_user(
+                site_title,
+                version,
+                updated,
+                peer_id,
+                snapshot,
+                peer_rows,
+                names,
+                now,
+                window_minutes,
+                active_minutes,
+                stale_minutes,
+                refresh_seconds,
+                detail_limit,
+                graph_filename,
+            ),
+        )
+        write_text(
+            output / "online" / slug / graph_filename,
+            render_online_graph_svg(
+                peer_rows,
+                now,
+                window_minutes,
+                f"{name} RX/TX rate",
+            ),
+        )
+    return 1 + len(peer_ids)
+
+
+def generate_online_site(
+    output: Path,
+    cfg: dict[str, str],
+    rows: list[HistoryRow],
+    names: dict[str, str],
+    now: datetime,
+    snapshot: OnlineSnapshot | None = None,
+) -> dict[str, int]:
+    snapshot = snapshot or OnlineSnapshot()
+    site_title = cfg.get("TITLE", "AWGStat")
+    version = read_version(cfg)
+    updated = now.strftime("%d/%m/%Y %H:%M")
+    periods = build_report_periods(cfg, rows, now)
+    window_minutes, active_minutes, stale_minutes, refresh_seconds = (
+        online_settings(cfg)
+    )
+    write_text(
+        output / "index.html",
+        render_root(
+            site_title,
+            version,
+            updated,
+            periods,
+            snapshot,
+            rows,
+            now,
+            window_minutes,
+            active_minutes,
+            stale_minutes,
+            refresh_seconds,
+        ),
+    )
+    online_pages = write_online_report(
+        output,
+        cfg,
+        rows,
+        names,
+        snapshot,
+        now,
+        site_title,
+        version,
+        updated,
+    )
+    return {
+        "pages": 1 + online_pages,
+        "online_user_pages": max(online_pages - 1, 0),
+    }
+
+
+def generate_site(
+    output: Path,
+    cfg: dict[str, str],
+    rows: list[HistoryRow],
+    names: dict[str, str],
+    now: datetime,
+    snapshot: OnlineSnapshot | None = None,
+) -> dict[str, int]:
+    snapshot = snapshot or OnlineSnapshot()
+    site_title = cfg.get("TITLE", "AWGStat")
+    version = read_version(cfg)
+    updated = now.strftime("%d/%m/%Y %H:%M")
+    detail_limit = config_int(cfg, "DETAIL_ROWS", 200, maximum=5000)
+
+    periods = build_report_periods(cfg, rows, now)
+    window_minutes, active_minutes, stale_minutes, refresh_seconds = (
+        online_settings(cfg)
+    )
 
     write_text(output / "images" / "awgstat.svg", AWGSTAT_LOGO)
     write_text(output / "images" / "graph.svg", GRAPH_ICON)
     write_text(output / "images" / "datetime.svg", DATETIME_ICON)
     write_text(
         output / "index.html",
-        render_root(site_title, version, updated, periods),
+        render_root(
+            site_title,
+            version,
+            updated,
+            periods,
+            snapshot,
+            rows,
+            now,
+            window_minutes,
+            active_minutes,
+            stale_minutes,
+            refresh_seconds,
+        ),
     )
 
-    page_count = 1
+    online_pages = write_online_report(
+        output,
+        cfg,
+        rows,
+        names,
+        snapshot,
+        now,
+        site_title,
+        version,
+        updated,
+    )
+    page_count = 1 + online_pages
     user_page_count = 0
     for kind in REPORT_KINDS:
         write_text(
@@ -1069,6 +1951,7 @@ def generate_site(
     return {
         "pages": page_count,
         "user_pages": user_page_count,
+        "online_user_pages": max(online_pages - 1, 0),
         "periods": sum(len(items) for items in periods.values()),
     }
 
@@ -1088,10 +1971,13 @@ def remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def publish_site(stage: Path, webroot: Path) -> None:
-    """Transactionally replace AWGStat-owned output and preserve other files."""
+def publish_owned(
+    stage: Path,
+    webroot: Path,
+    owned: tuple[str, ...],
+) -> None:
+    """Transactionally replace selected AWGStat-owned output paths."""
     webroot.mkdir(parents=True, exist_ok=True)
-    owned = (*OWNED_DIRECTORIES, *OWNED_FILES)
     backups: dict[str, Path] = {}
     installed: list[Path] = []
 
@@ -1130,6 +2016,15 @@ def publish_site(stage: Path, webroot: Path) -> None:
     for backup in backups.values():
         remove_path(backup)
 
+
+def publish_site(stage: Path, webroot: Path) -> None:
+    """Replace the complete AWGStat output and preserve unrelated files."""
+    publish_owned(
+        stage,
+        webroot,
+        (*OWNED_DIRECTORIES, *OWNED_FILES),
+    )
+
     # v1.x owned this directory; remove it only after the v2 tree is complete.
     for legacy_name in ("reports", ".reports-old"):
         legacy = webroot / legacy_name
@@ -1137,29 +2032,57 @@ def publish_site(stage: Path, webroot: Path) -> None:
             remove_path(legacy)
 
 
+def publish_online_site(stage: Path, webroot: Path) -> None:
+    """Replace only the live report and root index."""
+    publish_owned(stage, webroot, ("online", "index.html"))
+
+
 def main() -> int:
     cfg = load_config()
     changed = expand(cfg["CHANGED"], cfg)
     history = expand(cfg["HISTORY"], cfg)
     names_path = expand(cfg["NAMES"], cfg)
+    online_path = expand(
+        cfg.get("ONLINE_STATE", "${WORKDIR}/online.csv"),
+        cfg,
+    )
     webroot = Path(cfg["WEBROOT"])
     index_path = webroot / "index.html"
     force = "--force" in sys.argv
-
-    need_rebuild = (
-        force
-        or changed.exists()
-        or not index_path.exists()
-        or any(not (webroot / name).exists() for name in OWNED_DIRECTORIES)
-        or names_map_changed(names_path, index_path)
-    )
-    if not need_rebuild:
-        return 0
-
+    online_only = "--online" in sys.argv
+    scheduled = "--scheduled" in sys.argv
     tz = resolve_tz(cfg.get("REPORT_TZ", "Europe/Moscow"))
     now = datetime.now(tz)
+    key, label, start, end = period_metadata("daily", now)
+    current_daily = PeriodReport("daily", key, label, start, end)
+
+    structure_missing = (
+        not index_path.exists()
+        or not (webroot / "style.css").exists()
+        or any(not (webroot / name).exists() for name in OWNED_DIRECTORIES)
+        or not (
+            webroot
+            / "daily"
+            / period_dirname(current_daily)
+            / "index.html"
+        ).exists()
+    )
+    need_rebuild = (
+        force
+        or structure_missing
+        or changed.exists()
+        or names_map_changed(names_path, index_path)
+    )
+    build_online_only = (
+        (online_only and not force and not structure_missing)
+        or (scheduled and not need_rebuild)
+    )
+    if not need_rebuild and not build_online_only:
+        return 0
+
     names = load_names(names_path)
     rows = read_history(history, tz)
+    snapshot = read_online_state(online_path, tz)
 
     static_src = SCRIPT_DIR / "style.css"
     webroot.parent.mkdir(parents=True, exist_ok=True)
@@ -1168,14 +2091,33 @@ def main() -> int:
         dir=webroot.parent,
     ) as temporary:
         stage = Path(temporary)
-        generate_site(stage, cfg, rows, names, now)
-        if static_src.exists():
-            shutil.copy2(static_src, stage / "style.css")
+        if build_online_only:
+            generate_online_site(
+                stage,
+                cfg,
+                rows,
+                names,
+                now,
+                snapshot,
+            )
+            publish_online_site(stage, webroot)
         else:
-            write_text(stage / "style.css", "")
-        publish_site(stage, webroot)
+            generate_site(
+                stage,
+                cfg,
+                rows,
+                names,
+                now,
+                snapshot,
+            )
+            if static_src.exists():
+                shutil.copy2(static_src, stage / "style.css")
+            else:
+                write_text(stage / "style.css", "")
+            publish_site(stage, webroot)
 
-    changed.unlink(missing_ok=True)
+    if not build_online_only:
+        changed.unlink(missing_ok=True)
     return 0
 
 

@@ -1,11 +1,8 @@
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # AWGStat — system crontab (/etc/cron.d/awgstat), not user crontab
-* * * * * root /opt/wgstats/wgstats.sh >/dev/null 2>&1
-*/5 * * * * root /usr/bin/python3 /opt/wgstats/htmlgen.py >/dev/null 2>&1
-# Rebuild "Today" after midnight even with zero traffic (00:01 in REPORT_TZ)
-CRON_TZ=__REPORT_TZ__
-1 0 * * * root /usr/bin/python3 /opt/wgstats/htmlgen.py --force >/dev/null 2>&1
-CRON_TZ=UTC
+# One lock protects collection → ONLINE publication from overlap and races.
+* * * * * root /opt/wgstats/awgstat-cycle.sh >/dev/null 2>&1
+# awgstat-cycle.sh forces "Today" at 00:01 in REPORT_TZ.
 # Daily backup check at 03:00 — backup.sh no-ops until BACKUP_DAYS elapsed
 0 3 * * * root /opt/wgstats/backup.sh >/dev/null 2>&1
