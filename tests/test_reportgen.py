@@ -9,6 +9,7 @@ from pathlib import Path
 from reportgen import (
     HistoryRow,
     aggregate_rows,
+    build_all_time_report,
     build_periods,
     generate_site,
     parse_name_line,
@@ -85,6 +86,7 @@ class ReportGeneratorTests(unittest.TestCase):
         daily = build_periods(rows, "daily", now, 31)
         weekly = build_periods(rows, "weekly", now, 12)
         monthly = build_periods(rows, "monthly", now, 12)
+        all_time = build_all_time_report(rows, now)
 
         self.assertEqual([item.key for item in daily], [
             "2026-09-02",
@@ -94,6 +96,8 @@ class ReportGeneratorTests(unittest.TestCase):
         self.assertEqual(weekly[0].key, "2026-W36")
         self.assertEqual(weekly[0].total, 950)
         self.assertEqual([item.key for item in monthly], ["2026-09", "2026-08"])
+        self.assertEqual(all_time[0].label, "31/08/2026 - 02/09/2026")
+        self.assertEqual(all_time[0].total, 950)
 
     def test_history_parser_sanitizes_invalid_counters(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -145,7 +149,7 @@ class ReportGeneratorTests(unittest.TestCase):
         ]
         cfg = {
             "TITLE": "Test AWGStat",
-            "VERSION": "2.0.0-test",
+            "VERSION": "2.0.1-test",
             "DAILY_REPORTS": "31",
             "WEEKLY_REPORTS": "12",
             "MONTHLY_REPORTS": "12",
@@ -175,6 +179,9 @@ class ReportGeneratorTests(unittest.TestCase):
 
             self.assertTrue((output / "daily" / "index.html").exists())
             self.assertIn("daily/index.html", index)
+            self.assertIn("total/index.html", index)
+            self.assertIn("ALL TIME REPORT", index)
+            self.assertTrue((output / "total" / "index.html").exists())
             self.assertIn("02Sep2026-02Sep2026", category)
             self.assertIn("Alice &lt;Admin&gt;", period)
             self.assertNotIn("Alice <Admin>", period)
@@ -229,7 +236,7 @@ class ReportGeneratorTests(unittest.TestCase):
             root = Path(temporary)
             stage = root / "stage"
             webroot = root / "www"
-            for directory in ("daily", "weekly", "monthly", "images"):
+            for directory in ("daily", "weekly", "monthly", "total", "images"):
                 (stage / directory).mkdir(parents=True)
                 (stage / directory / "new.html").write_text(
                     "new",
@@ -246,6 +253,7 @@ class ReportGeneratorTests(unittest.TestCase):
 
             self.assertEqual((webroot / "keep.txt").read_text(), "keep")
             self.assertTrue((webroot / "daily" / "new.html").exists())
+            self.assertTrue((webroot / "total" / "new.html").exists())
             self.assertTrue((webroot / "images" / "new.html").exists())
             self.assertFalse((webroot / "reports").exists())
 

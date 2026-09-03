@@ -8,7 +8,7 @@ navigation model.
 
 Generated reports include:
 
-- a SARG-style report index with separate daily, weekly, and monthly archives;
+- a SARG-style report index with daily, weekly, monthly, and all-time archives;
 - classic `DDMonYYYY-DDMonYYYY` report directories;
 - a `Top users` table with `NUM`, date/time and graph links, `USERID`,
   `USERIP`, `CONNECT`, RX/TX, bytes, percentage, total, and average rows;
@@ -22,7 +22,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.0.0**
+See [`VERSION`](VERSION). Current: **2.0.1**
 
 ## Requirements
 
@@ -34,9 +34,9 @@ See [`VERSION`](VERSION). Current: **2.0.0**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.0.0/awgstat-2.0.0.tar.gz
-tar -xzf awgstat-2.0.0.tar.gz
-cd awgstat-2.0.0
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.0.1/awgstat-2.0.1.tar.gz
+tar -xzf awgstat-2.0.1.tar.gz
+cd awgstat-2.0.1
 sudo bash install.sh
 ```
 
@@ -108,11 +108,14 @@ weekly/
 └── ...same SARG report layout...
 monthly/
 └── ...same SARG report layout...
+total/
+└── ...one report for all retained history...
 ```
 
 The generator builds the complete tree in a temporary directory and publishes
 it only after all pages are ready. Files outside `index.html`, `style.css`,
-`images/`, `daily/`, `weekly/`, and `monthly/` in `WEBROOT` are left untouched.
+`images/`, `daily/`, `weekly/`, `monthly/`, and `total/` in `WEBROOT` are left
+untouched.
 
 ## Layout
 

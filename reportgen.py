@@ -18,16 +18,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPORT_KINDS = ("daily", "weekly", "monthly")
+CALENDAR_REPORT_KINDS = ("daily", "weekly", "monthly")
+REPORT_KINDS = (*CALENDAR_REPORT_KINDS, "total")
 KIND_TITLES = {
     "daily": "DAILY REPORTS",
     "weekly": "WEEKLY REPORTS",
     "monthly": "MONTHLY REPORTS",
+    "total": "ALL TIME REPORT",
 }
 KIND_DESCRIPTIONS = {
     "daily": "Daily report index",
     "weekly": "Weekly report index",
     "monthly": "Monthly report index",
+    "total": "All-time report index",
 }
 KIND_CONFIG_KEYS = {
     "daily": "DAILY_REPORTS",
@@ -358,6 +361,32 @@ def build_periods(
     return periods
 
 
+def build_all_time_report(
+    rows: list[HistoryRow],
+    now: datetime,
+) -> list[PeriodReport]:
+    """Build one report covering every retained traffic interval."""
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    row_days = [
+        row.timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+        for row in rows
+    ]
+    start = min(row_days, default=today)
+    last_day = max(row_days, default=today)
+    last_day = max(last_day, today)
+    end = last_day + timedelta(days=1)
+    period = PeriodReport(
+        kind="total",
+        key="all-time",
+        label=f"{start:%d/%m/%Y} - {last_day:%d/%m/%Y}",
+        start=start,
+        end=end,
+        rows=list(rows),
+    )
+    period.users = aggregate_rows(period.rows)
+    return [period]
+
+
 def resolved_name(summary: TrafficSummary, names: dict[str, str]) -> str:
     return lookup_name(names, summary.peer, summary.name) or "неизвестный"
 
@@ -417,6 +446,7 @@ def nav_markup(root_prefix: str) -> str:
         (f"{root_prefix}daily/index.html", "DAILY"),
         (f"{root_prefix}weekly/index.html", "WEEKLY"),
         (f"{root_prefix}monthly/index.html", "MONTHLY"),
+        (f"{root_prefix}total/index.html", "ALL TIME"),
     ]
     return (
         '<div class="navigation">'
@@ -945,7 +975,7 @@ def generate_site(
     detail_limit = config_int(cfg, "DETAIL_ROWS", 200, maximum=5000)
 
     periods: dict[str, list[PeriodReport]] = {}
-    for kind in REPORT_KINDS:
+    for kind in CALENDAR_REPORT_KINDS:
         limit = config_int(
             cfg,
             KIND_CONFIG_KEYS[kind],
@@ -953,6 +983,7 @@ def generate_site(
             maximum=1000,
         )
         periods[kind] = build_periods(rows, kind, now, limit)
+    periods["total"] = build_all_time_report(rows, now)
 
     write_text(output / "images" / "awgstat.svg", AWGSTAT_LOGO)
     write_text(output / "images" / "graph.svg", GRAPH_ICON)
