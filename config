@@ -2,7 +2,7 @@
 # AWGStat configuration
 ########################################
 
-VERSION="2.1.1"
+VERSION="2.2.0"
 
 # Docker container with AmneziaWG
 CONTAINER="amnezia-awg2"
@@ -37,7 +37,7 @@ MONTHLY_REPORTS=12
 # Maximum raw traffic intervals on each user detail page (0 = hide)
 DETAIL_ROWS=200
 
-# ONLINE report: recent window, activity/freshness thresholds, browser refresh
+# ONLINE report: summary/ranking window, activity/freshness, browser refresh
 ONLINE_WINDOW_MINUTES=60
 ONLINE_ACTIVE_MINUTES=3
 ONLINE_STALE_MINUTES=3

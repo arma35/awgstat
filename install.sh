@@ -21,7 +21,7 @@ fix_crlf() {
     sed -i 's/\r$//' "${f}"
 }
 
-for f in install.sh backup.sh wgstats.sh awgstat-cycle.sh htmlgen.py reportgen.py config cron/awgstat VERSION; do
+for f in install.sh backup.sh wgstats.sh awgstat-cycle.sh htmlgen.py reportgen.py online.js config cron/awgstat VERSION; do
     fix_crlf "${SRC}/${f}"
 done
 
@@ -34,6 +34,7 @@ install -m 0755 "${SRC}/wgstats.sh" "${DEST}/wgstats.sh"
 install -m 0755 "${SRC}/awgstat-cycle.sh" "${DEST}/awgstat-cycle.sh"
 install -m 0755 "${SRC}/htmlgen.py" "${DEST}/htmlgen.py"
 install -m 0644 "${SRC}/reportgen.py" "${DEST}/reportgen.py"
+install -m 0644 "${SRC}/online.js" "${DEST}/online.js"
 install -m 0755 "${SRC}/backup.sh" "${DEST}/backup.sh"
 install -m 0644 "${SRC}/style.css" "${DEST}/style.css"
 install -m 0644 "${SRC}/VERSION" "${DEST}/VERSION"

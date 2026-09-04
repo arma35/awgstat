@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ from reportgen import (
     OnlineSnapshot,
     aggregate_rows,
     build_all_time_report,
+    build_online_graph_points,
     build_periods,
     build_rate_series,
     generate_online_site,
@@ -26,6 +28,7 @@ from reportgen import (
     read_history,
     read_online_state,
     render_graph_svg,
+    render_online_graph_data,
     render_online_graph_svg,
     render_user_rows,
     user_slug,
@@ -267,6 +270,26 @@ class ReportGeneratorTests(unittest.TestCase):
         self.assertIn("Alice &lt;Admin&gt; &amp; phone", graph)
         self.assertNotIn("Alice <Admin>", graph)
 
+    def test_online_graph_data_is_compact_chronological_and_bounded(self) -> None:
+        now = datetime(2026, 9, 3, 10, 3, 30, tzinfo=TZ)
+        rows = [
+            row(datetime(2026, 9, 3, 10, 3, tzinfo=TZ), "peer-a", 60, 120),
+            row(datetime(2026, 9, 3, 10, 1, tzinfo=TZ), "peer-a", 60, 120),
+            row(datetime(2026, 9, 3, 10, 1, 30, tzinfo=TZ), "peer-b", 60, 0),
+            row(datetime(2026, 9, 3, 10, 4, tzinfo=TZ), "peer-a", 999, 999),
+        ]
+
+        points = build_online_graph_points(rows, now)
+        payload = json.loads(render_online_graph_data(rows, now))
+
+        self.assertEqual(len(points), 2)
+        self.assertLess(points[0][0], points[1][0])
+        self.assertEqual(points[0][1:], (2.0, 2.0))
+        self.assertEqual(payload["version"], 1)
+        self.assertEqual(payload["first"], points[0][0])
+        self.assertEqual(payload["last"], points[-1][0])
+        self.assertEqual(payload["points"], [list(point) for point in points])
+
     def test_site_contains_archives_and_user_details(self) -> None:
         now = datetime(2026, 9, 2, 17, 0, tzinfo=TZ)
         rows = [
@@ -282,7 +305,7 @@ class ReportGeneratorTests(unittest.TestCase):
         ]
         cfg = {
             "TITLE": "Test AWGStat",
-            "VERSION": "2.1.1-test",
+            "VERSION": "2.2.0-test",
             "DAILY_REPORTS": "31",
             "WEEKLY_REPORTS": "12",
             "MONTHLY_REPORTS": "12",
@@ -352,8 +375,16 @@ class ReportGeneratorTests(unittest.TestCase):
             self.assertTrue((output / "total" / "index.html").exists())
             self.assertEqual(
                 len(list((output / "online").glob("traffic-*.svg"))),
-                1,
+                4,
             )
+            self.assertTrue((output / "online" / "graph-controls.js").exists())
+            graph_data = json.loads(
+                (output / "online" / "traffic-history.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(graph_data["version"], 1)
+            self.assertGreater(len(graph_data["points"]), 0)
             self.assertIn("02Sep2026-02Sep2026", category)
             self.assertIn("Alice &lt;Admin&gt;", period)
             self.assertNotIn("Alice <Admin>", period)
@@ -382,6 +413,14 @@ class ReportGeneratorTests(unittest.TestCase):
                 online.index("LAST 30 DAYS"),
                 online.index("WG COUNTERS"),
             )
+            self.assertIn('id="traffic-period"', online)
+            self.assertIn('value="60"', online)
+            self.assertIn('value="360"', online)
+            self.assertIn('value="720"', online)
+            self.assertIn('value="1440"', online)
+            self.assertIn('value="custom"', online)
+            self.assertIn('type="datetime-local"', online)
+            self.assertIn('src="graph-controls.js"', online)
             self.assertIn("ONLINE USER REPORT", online_user)
             self.assertEqual(
                 len(list((output / "online" / slug).glob("traffic-*.svg"))),
@@ -559,6 +598,7 @@ class ReportGeneratorTests(unittest.TestCase):
         cron = (root / "cron" / "awgstat").read_text(encoding="utf-8")
         cycle = (root / "awgstat-cycle.sh").read_text(encoding="utf-8")
         install = (root / "install.sh").read_text(encoding="utf-8")
+        online_script = (root / "online.js").read_text(encoding="utf-8")
 
         self.assertIn(
             "* * * * * root /opt/wgstats/awgstat-cycle.sh",
@@ -576,8 +616,11 @@ class ReportGeneratorTests(unittest.TestCase):
         self.assertIn('"00:01"', cycle)
         self.assertIn("htmlgen.py\" --force", cycle)
         self.assertIn('install -m 0755 "${SRC}/awgstat-cycle.sh"', install)
+        self.assertIn('install -m 0644 "${SRC}/online.js"', install)
         self.assertIn('ensure_config_key "ONLINE_STATE"', install)
         self.assertNotIn('htmlgen.py" --force || true', install)
+        self.assertIn('fetch("traffic-history.json"', online_script)
+        self.assertIn("CUSTOM DATE / TIME", online_script)
 
 
 if __name__ == "__main__":

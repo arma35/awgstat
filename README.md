@@ -13,6 +13,8 @@ Generated reports include:
 - a minute-updated online report with collector freshness, current peer state,
   RX/TX rates, today/month/rolling-30-day totals, recent rankings, and
   total/per-user time-series graphs;
+- an interactive total-traffic graph with 60-minute, 6-hour, 12-hour,
+  24-hour, and custom date/time ranges;
 - classic `DDMonYYYY-DDMonYYYY` report directories;
 - a `Top users` table with `NUM`, date/time and graph links, `USERID`,
   `USERIP`, `CONNECT`, RX/TX, bytes, percentage, total, and average rows;
@@ -26,7 +28,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.1.1**
+See [`VERSION`](VERSION). Current: **2.2.0**
 
 ## Requirements
 
@@ -38,9 +40,9 @@ See [`VERSION`](VERSION). Current: **2.1.1**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.1.1/awgstat-2.1.1.tar.gz
-tar -xzf awgstat-2.1.1.tar.gz
-cd awgstat-2.1.1
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.2.0/awgstat-2.2.0.tar.gz
+tar -xzf awgstat-2.2.0.tar.gz
+cd awgstat-2.2.0
 sudo bash install.sh
 ```
 
@@ -69,7 +71,7 @@ every 5 minutes, forced HTML rebuild at 00:01 UTC+3, backup check daily at
 | `MONTHLY_REPORTS` | Number of monthly archive periods (`0` = all retained history) |
 | `DETAIL_ROWS` | Maximum raw intervals on a user page (`0` = hide) |
 | `ONLINE_STATE` | Atomic current WireGuard snapshot written by the collector |
-| `ONLINE_WINDOW_MINUTES` | Recent traffic/rate graph window (default `60`) |
+| `ONLINE_WINDOW_MINUTES` | Recent summary/ranking window and default graph preset |
 | `ONLINE_ACTIVE_MINUTES` | Recent-handshake activity threshold (default `3`) |
 | `ONLINE_STALE_MINUTES` | Collector heartbeat stale threshold (default `3`) |
 | `ONLINE_REFRESH_SECONDS` | Browser auto-refresh interval (default `60`) |
@@ -109,9 +111,14 @@ The current-peers table shows per-user totals for `TODAY` and `THIS MONTH` in
 AWGStat history. `WG COUNTERS` remains the kernel counter since the WireGuard
 interface was created and can reset when that interface is recreated.
 
-Graphs and recent rankings use actual AWGStat traffic intervals from the last
-`ONLINE_WINDOW_MINUTES`. Missing minutes are rendered as zero. No site, URL, or
-application data is inferred.
+The total-traffic graph has preset ranges for the last 60 minutes, 6 hours,
+12 hours, and 24 hours. `CUSTOM DATE / TIME` accepts explicit `FROM` and `TO`
+values in the browser's local timezone. Presets use pre-rendered SVG files;
+custom ranges are rendered locally from a compact, aggregate-only history
+file and do not expose peer identities.
+
+Graphs and recent rankings use actual AWGStat traffic intervals. Missing
+minutes are rendered as zero. No site, URL, or application data is inferred.
 
 ## Generated report tree
 
@@ -142,7 +149,12 @@ total/
 └── ...one report for all retained history...
 online/
 ├── index.html
-├── traffic-<timestamp>.svg
+├── graph-controls.js
+├── traffic-history.json
+├── traffic-60-<timestamp>.svg
+├── traffic-360-<timestamp>.svg
+├── traffic-720-<timestamp>.svg
+├── traffic-1440-<timestamp>.svg
 └── <peer-id>/
     ├── index.html
     └── traffic-<timestamp>.svg
@@ -160,6 +172,7 @@ wgstats.sh           # collector
 awgstat-cycle.sh     # serialized minute collection + report publication
 htmlgen.py           # HTML generator entry point
 reportgen.py         # SARG-style report implementation
+online.js            # interactive ONLINE graph period selector
 backup.sh            # data backup
 config               # settings
 style.css            # report CSS

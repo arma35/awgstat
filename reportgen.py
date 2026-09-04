@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import shutil
 import sys
 import tempfile
@@ -46,6 +47,12 @@ OWNED_FILES = ("index.html", "style.css")
 MONTH_ABBREVIATIONS = (
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+ONLINE_GRAPH_PERIODS = (
+    (60, "LAST 60 MINUTES"),
+    (360, "LAST 6 HOURS"),
+    (720, "LAST 12 HOURS"),
+    (1440, "LAST 24 HOURS"),
 )
 
 
@@ -613,6 +620,41 @@ def build_rate_series(
         )
         for index in range(count)
     ]
+
+
+def build_online_graph_points(
+    rows: Iterable[HistoryRow],
+    now: datetime,
+) -> list[tuple[int, float, float]]:
+    """Build compact non-zero per-minute rates for interactive graph ranges."""
+    rates: dict[int, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for row in rows:
+        if row.timestamp > now or row.total <= 0:
+            continue
+        minute = int(row.timestamp.timestamp()) // 60 * 60
+        interval = row.interval if row.interval > 0 else 60
+        rates[minute][0] += row.rx_bytes / interval
+        rates[minute][1] += row.tx_bytes / interval
+    return [
+        (minute, round(values[0], 3), round(values[1], 3))
+        for minute, values in sorted(rates.items())
+    ]
+
+
+def render_online_graph_data(
+    rows: Iterable[HistoryRow],
+    now: datetime,
+) -> str:
+    points = build_online_graph_points(rows, now)
+    payload = {
+        "version": 1,
+        "generated": int(now.timestamp()),
+        "timezone": str(now.tzinfo or ""),
+        "first": points[0][0] if points else None,
+        "last": points[-1][0] if points else None,
+        "points": points,
+    }
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":")) + "\n"
 
 
 def snapshot_age(snapshot: OnlineSnapshot, now: datetime) -> float | None:
@@ -1506,11 +1548,46 @@ def render_online(
     active_minutes: int,
     stale_minutes: int,
     refresh_seconds: int,
-    graph_filename: str,
+    graph_filenames: dict[int, str],
 ) -> str:
+    default_graph_minutes = (
+        window_minutes
+        if window_minutes in graph_filenames
+        else ONLINE_GRAPH_PERIODS[0][0]
+    )
+    graph_options = []
+    for minutes, label in ONLINE_GRAPH_PERIODS:
+        selected = ' selected="selected"' if minutes == default_graph_minutes else ""
+        graph_options.append(
+            f'<option value="{minutes}" data-graph-src="'
+            f'{html.escape(graph_filenames[minutes], quote=True)}"{selected}>'
+            f"{html.escape(label)}</option>"
+        )
+    graph_options.append('<option value="custom">CUSTOM DATE / TIME</option>')
+    custom_end = now.replace(second=0, microsecond=0)
+    custom_start = custom_end - timedelta(minutes=60)
+    controls = (
+        '<div class="graph-controls">'
+        '<label for="traffic-period">GRAPH PERIOD</label> '
+        f'<select id="traffic-period">{"".join(graph_options)}</select> '
+        '<span id="custom-period" class="custom-period">'
+        '<label for="traffic-from">FROM</label> '
+        f'<input id="traffic-from" type="datetime-local" step="60" value="{custom_start:%Y-%m-%dT%H:%M}"> '
+        '<label for="traffic-to">TO</label> '
+        f'<input id="traffic-to" type="datetime-local" step="60" value="{custom_end:%Y-%m-%dT%H:%M}"> '
+        '<button id="traffic-apply" type="button">APPLY</button>'
+        "</span>"
+        '<span id="traffic-graph-status" class="graph-status" aria-live="polite"></span>'
+        "</div>"
+    )
     graph = (
         '<div class="report graph-report"><table cellpadding="0" cellspacing="2">'
-        f'<tr><td><img src="{html.escape(graph_filename, quote=True)}" alt="Recent RX/TX rate graph"></td></tr>'
+        '<tr><td>'
+        f'<img id="traffic-graph-image" src="{html.escape(graph_filenames[default_graph_minutes], quote=True)}" alt="Recent RX/TX rate graph">'
+        '<svg id="traffic-custom-graph" class="custom-traffic-graph" '
+        'xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" '
+        'role="img" aria-label="Custom RX/TX rate graph"></svg>'
+        "</td></tr>"
         "</table></div>"
     )
     content = (
@@ -1531,11 +1608,13 @@ def render_online(
             active_minutes,
             stale_minutes,
         )
-        + f'<div class="online-section">TRAFFIC RATE — LAST {window_minutes} MINUTES</div>'
+        + f'<div id="traffic-rate-title" class="online-section">TRAFFIC RATE — {html.escape(dict(ONLINE_GRAPH_PERIODS)[default_graph_minutes])}</div>'
+        + controls
         + graph
         + f'<div class="online-section">TOP TRAFFIC — LAST {window_minutes} MINUTES</div>'
         + render_online_ranking(recent_rows, names, window_minutes)
         + '<div class="report-note">Rates and rankings use AWGStat sampling intervals. AmneziaWG does not expose sites, URLs, or application sessions.</div>'
+        + '<script type="text/javascript" src="graph-controls.js"></script>'
     )
     return render_document(
         site_title,
@@ -1737,7 +1816,11 @@ def write_online_report(
     )
     detail_limit = config_int(cfg, "DETAIL_ROWS", 200, maximum=5000)
     recent_rows = recent_history_rows(rows, now, window_minutes)
-    graph_filename = f"traffic-{int(now.timestamp())}.svg"
+    graph_filenames = {
+        minutes: f"traffic-{minutes}-{int(now.timestamp())}.svg"
+        for minutes, _label in ONLINE_GRAPH_PERIODS
+    }
+    user_graph_filename = f"traffic-{int(now.timestamp())}.svg"
     write_text(
         output / "online" / "index.html",
         render_online(
@@ -1753,17 +1836,26 @@ def write_online_report(
             active_minutes,
             stale_minutes,
             refresh_seconds,
-            graph_filename,
+            graph_filenames,
         ),
     )
+    for minutes, label in ONLINE_GRAPH_PERIODS:
+        write_text(
+            output / "online" / graph_filenames[minutes],
+            render_online_graph_svg(
+                recent_history_rows(rows, now, minutes),
+                now,
+                minutes,
+                f"Total traffic rate — {label.lower()}",
+            ),
+        )
     write_text(
-        output / "online" / graph_filename,
-        render_online_graph_svg(
-            recent_rows,
-            now,
-            window_minutes,
-            f"Total traffic rate — last {window_minutes} minutes",
-        ),
+        output / "online" / "traffic-history.json",
+        render_online_graph_data(rows, now),
+    )
+    shutil.copyfile(
+        SCRIPT_DIR / "online.js",
+        output / "online" / "graph-controls.js",
     )
 
     rows_by_peer: dict[str, list[HistoryRow]] = defaultdict(list)
@@ -1799,11 +1891,11 @@ def write_online_report(
                 stale_minutes,
                 refresh_seconds,
                 detail_limit,
-                graph_filename,
+                user_graph_filename,
             ),
         )
         write_text(
-            output / "online" / slug / graph_filename,
+            output / "online" / slug / user_graph_filename,
             render_online_graph_svg(
                 peer_rows,
                 now,

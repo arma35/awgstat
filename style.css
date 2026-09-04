@@ -253,12 +253,61 @@ table.report {
   overflow-x: auto;
 }
 
-.graph-report img {
+.graph-report img,
+.graph-report svg {
   display: block;
   width: 900px;
   max-width: none;
   height: 360px;
   border: none;
+}
+
+.graph-report .custom-traffic-graph {
+  display: none;
+}
+
+.graph-controls {
+  margin: 4px auto 6px;
+  color: darkblue;
+  font-family: Tahoma, Verdana, Arial, sans-serif;
+  font-size: 9px;
+  text-align: center;
+}
+
+.graph-controls label {
+  font-weight: bold;
+}
+
+.graph-controls select,
+.graph-controls input,
+.graph-controls button {
+  border: 1px solid #6a5acd;
+  color: #000000;
+  background-color: lavender;
+  font-family: Tahoma, Verdana, Arial, sans-serif;
+  font-size: 9px;
+}
+
+.graph-controls button {
+  color: darkblue;
+  background-color: blanchedalmond;
+  cursor: pointer;
+}
+
+.custom-period {
+  display: none;
+  margin-left: 4px;
+}
+
+.graph-status {
+  display: block;
+  min-height: 12px;
+  margin-top: 3px;
+  color: #666666;
+}
+
+.graph-status-error {
+  color: #b00020;
 }
 
 a > img {
@@ -316,7 +365,8 @@ a > img {
 
 @media print {
   .navigation,
-  .report-note {
+  .report-note,
+  .graph-controls {
     display: none;
   }
 
