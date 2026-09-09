@@ -9,7 +9,9 @@ alwaysApply: true
 - Update the version in `VERSION`, `config`, `README.md`, and `CHANGELOG.md`.
 - Never overwrite, move, or delete an existing release or tag.
 - Commit releases as `Release AWGStat <version>`.
-- Build and verify a new `awgstat-<version>.tar.gz` artifact.
+- Push/merge the release commit to `main`; `.github/workflows/release.yml` then validates, builds, tags, and publishes the release automatically.
+- The workflow must produce `awgstat-<version>.tar.gz` and its SHA-256 checksum.
 - Shell scripts and Python files in release archives must use LF endings.
-- Publish the new GitHub release before deploying that exact version.
+- Reusing a version for a different commit is forbidden and must fail the release workflow.
+- Publish and verify the GitHub release before deploying that exact version.
 - Create and verify server backups before every deployment.
