@@ -28,7 +28,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.3.0**
+See [`VERSION`](VERSION). Current: **2.3.1**
 
 ## Requirements
 
@@ -40,9 +40,9 @@ See [`VERSION`](VERSION). Current: **2.3.0**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.0/awgstat-2.3.0.tar.gz
-tar -xzf awgstat-2.3.0.tar.gz
-cd awgstat-2.3.0
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.1/awgstat-2.3.1.tar.gz
+tar -xzf awgstat-2.3.1.tar.gz
+cd awgstat-2.3.1
 sudo bash install.sh
 ```
 
@@ -54,6 +54,14 @@ Default install path: `/opt/wgstats`
 Cron: serialized collection + online publication every minute, archive refresh
 every 5 minutes, forced HTML rebuild at 00:01 UTC+3, backup check daily at
 03:00.
+
+## Releases
+
+Every published change increments `VERSION`. A push to `main` runs the GitHub
+Actions release workflow, validates shell/Python code, builds
+`awgstat-<version>.tar.gz` plus SHA-256 checksum, creates tag `v<version>`, and
+publishes an immutable GitHub Release. Reusing a version whose tag points to a
+different commit is rejected.
 
 ## Config
 
