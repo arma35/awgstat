@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.3.1] — 2026-09-09
+
+### Added
+- GitHub Actions workflow `.github/workflows/release.yml` for automatic release
+  publication from `main`.
+- Automatic validation of `VERSION`, `config`, `README.md`, `CHANGELOG.md`,
+  shell syntax, Python compilation and unit tests before publishing.
+- Release archive `awgstat-<version>.tar.gz` and matching SHA-256 checksum.
+
+### Changed
+- Release tags and GitHub Releases are now created automatically after a
+  successful push to `main`.
+- Reusing an already published version for another commit is rejected, keeping
+  releases immutable.
+
 ## [2.3.0] — 2026-09-09
 
 ### Added
