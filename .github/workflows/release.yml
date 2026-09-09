@@ -1,0 +1,176 @@
+name: Release AWGStat
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: awgstat-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read and validate version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Invalid VERSION: $VERSION" >&2
+            exit 1
+          }
+          grep -q "^VERSION=\"$VERSION\"$" config || {
+            echo "config VERSION does not match VERSION=$VERSION" >&2
+            exit 1
+          }
+          grep -Fq "Current: **$VERSION**" README.md || {
+            echo "README current version does not match VERSION=$VERSION" >&2
+            exit 1
+          }
+          grep -Fq "## [$VERSION]" CHANGELOG.md || {
+            echo "CHANGELOG does not contain version $VERSION" >&2
+            exit 1
+          }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Protect immutable versions
+        id: immutable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+
+          if git rev-parse "$TAG^{commit}" >/dev/null 2>&1; then
+            TAG_SHA="$(git rev-parse "$TAG^{commit}")"
+            if [[ "$TAG_SHA" != "$GITHUB_SHA" ]]; then
+              echo "ERROR: $TAG already exists at $TAG_SHA; current commit is $GITHUB_SHA." >&2
+              echo "Bump VERSION instead of modifying an existing release." >&2
+              exit 1
+            fi
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate shell scripts
+        if: steps.immutable.outputs.release_exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n install.sh backup.sh wgstats.sh awgstat-cycle.sh update.sh
+
+      - name: Validate Python
+        if: steps.immutable.outputs.release_exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile htmlgen.py reportgen.py amnezia_names.py
+          python3 -m unittest discover -s tests -v
+
+      - name: Build release archive
+        if: steps.immutable.outputs.release_exists != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$RUNNER_TEMP/awgstat-$VERSION"
+          ARCHIVE="$GITHUB_WORKSPACE/awgstat-$VERSION.tar.gz"
+          mkdir -p "$ROOT/cron"
+
+          files=(
+            VERSION
+            README.md
+            CHANGELOG.md
+            install.sh
+            update.sh
+            backup.sh
+            wgstats.sh
+            awgstat-cycle.sh
+            htmlgen.py
+            reportgen.py
+            amnezia_names.py
+            online.js
+            style.css
+            config
+            names.map.example
+          )
+
+          for file in "${files[@]}"; do
+            cp "$file" "$ROOT/$file"
+          done
+          cp cron/awgstat "$ROOT/cron/awgstat"
+
+          python3 - "$ROOT" <<'PY'
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          bad = []
+          for path in root.rglob('*'):
+              if not path.is_file():
+                  continue
+              data = path.read_bytes()
+              if b'\r' in data:
+                  bad.append(str(path.relative_to(root)))
+          if bad:
+              raise SystemExit('CR/CRLF found in release files: ' + ', '.join(bad))
+          PY
+
+          tar -C "$RUNNER_TEMP" -czf "$ARCHIVE" "awgstat-$VERSION"
+          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          tar -tzf "$ARCHIVE" >/dev/null
+
+      - name: Publish immutable GitHub Release
+        if: steps.immutable.outputs.release_exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            "awgstat-$VERSION.tar.gz" \
+            "awgstat-$VERSION.tar.gz.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "AWGStat $VERSION" \
+            --generate-notes
+
+      - name: Verify published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null
+          gh release download "$TAG" \
+            --pattern "awgstat-$VERSION.tar.gz" \
+            --dir "$RUNNER_TEMP/verify"
+          tar -tzf "$RUNNER_TEMP/verify/awgstat-$VERSION.tar.gz" >/dev/null
+          echo "AWGStat $VERSION release verified"
