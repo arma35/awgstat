@@ -28,7 +28,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.2.0**
+See [`VERSION`](VERSION). Current: **2.3.0**
 
 ## Requirements
 
@@ -40,9 +40,9 @@ See [`VERSION`](VERSION). Current: **2.2.0**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.2.0/awgstat-2.2.0.tar.gz
-tar -xzf awgstat-2.2.0.tar.gz
-cd awgstat-2.2.0
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.0/awgstat-2.3.0.tar.gz
+tar -xzf awgstat-2.3.0.tar.gz
+cd awgstat-2.3.0
 sudo bash install.sh
 ```
 
@@ -62,6 +62,8 @@ every 5 minutes, forced HTML rebuild at 00:01 UTC+3, backup check daily at
 | `VERSION` | Package version |
 | `CONTAINER` | Docker container name |
 | `WG_INTERFACE` | Interface inside container |
+| `AUTO_DISCOVER_NAMES` | Import missing peer names from Amnezia `clientsTable` (`1` = enabled) |
+| `AMNEZIA_CLIENTS_TABLE` | Path to Amnezia client metadata inside the container |
 | `WEBROOT` | HTML output directory |
 | `TITLE` | Page title |
 | `RETENTION_DAYS` | History retention |
@@ -85,7 +87,18 @@ Map peer public keys to names in `names.map` (**colon** separator — keys often
 <base64-public-key>:phone
 ```
 
-Unknown peers that generate traffic are appended automatically as `неизвестный`.
+### Automatic names from Amnezia
+
+With `AUTO_DISCOVER_NAMES=1` (default), the collector checks each peer seen in
+the current WireGuard dump. If its public key is absent from `names.map`,
+AWGStat reads `/opt/amnezia/awg/clientsTable` from the Amnezia container and
+imports the matching `clientId -> userData.clientName` pair.
+
+The Amnezia table is fetched lazily and at most once per collector cycle.
+Existing `names.map` entries are never overwritten, so a manually edited name
+acts as a permanent local override. If the client is not present in
+`clientsTable`, AWGStat leaves it unnamed and retries on a later cycle instead
+of writing a permanent `неизвестный` placeholder.
 
 ## Backup
 
@@ -172,11 +185,12 @@ wgstats.sh           # collector
 awgstat-cycle.sh     # serialized minute collection + report publication
 htmlgen.py           # HTML generator entry point
 reportgen.py         # SARG-style report implementation
+amnezia_names.py     # parse Amnezia clientsTable for automatic peer names
 online.js            # interactive ONLINE graph period selector
 backup.sh            # data backup
 config               # settings
 style.css            # report CSS
-names.map            # peer → name (local, not in release)
+names.map            # peer → name cache/override (local, not in release)
 VERSION
 cron/awgstat
 install.sh

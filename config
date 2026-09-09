@@ -2,13 +2,18 @@
 # AWGStat configuration
 ########################################
 
-VERSION="2.2.0"
+VERSION="2.3.0"
 
 # Docker container with AmneziaWG
 CONTAINER="amnezia-awg2"
 
 # WireGuard interface inside container
 WG_INTERFACE="awg0"
+
+# Amnezia client metadata inside the container. When enabled, AWGStat imports
+# clientId -> clientName for peers that are not yet present in names.map.
+AUTO_DISCOVER_NAMES=1
+AMNEZIA_CLIENTS_TABLE="/opt/amnezia/awg/clientsTable"
 
 # Project directory on host
 WORKDIR="/opt/wgstats"
