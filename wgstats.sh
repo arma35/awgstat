@@ -11,6 +11,8 @@ if [[ -z "${VERSION:-}" && -f "${SCRIPT_DIR}/VERSION" ]]; then
 fi
 VERSION="${VERSION:-0.0.0}"
 ONLINE_STATE="${ONLINE_STATE:-${WORKDIR}/online.csv}"
+AUTO_DISCOVER_NAMES="${AUTO_DISCOVER_NAMES:-1}"
+AMNEZIA_CLIENTS_TABLE="${AMNEZIA_CLIENTS_TABLE:-/opt/amnezia/awg/clientsTable}"
 
 LOG_DIR="${WORKDIR}/logs"
 LOG_FILE="${LOG_DIR}/wgstats.log"
@@ -157,37 +159,69 @@ peer_name() {
     fi
 }
 
-# Ensure peer exists in names.map; invent "неизвестный" / "неизвестный-N"
-ensure_peer_name() {
+# Load Amnezia's own clientId -> clientName table once per collector cycle.
+load_amnezia_names() {
+    [[ "${AUTO_DISCOVER_NAMES}" == "1" ]] || return 1
+    if [[ "${AMNEZIA_NAMES_LOADED:-0}" == "1" ]]; then
+        return 0
+    fi
+
+    declare -gA AMNEZIA_NAMES=()
+    AMNEZIA_NAMES_LOADED=1
+
+    local raw parsed key val
+    if ! raw="$(docker exec "${CONTAINER}" cat "${AMNEZIA_CLIENTS_TABLE}" 2>/dev/null)"; then
+        log "names.map: cannot read Amnezia clientsTable: ${AMNEZIA_CLIENTS_TABLE}"
+        return 1
+    fi
+    if ! parsed="$(printf '%s' "${raw}" | python3 "${SCRIPT_DIR}/amnezia_names.py" 2>/dev/null)"; then
+        log "names.map: cannot parse Amnezia clientsTable"
+        return 1
+    fi
+
+    while IFS=$'\t' read -r key val; do
+        [[ -n "${key}" && -n "${val}" ]] || continue
+        AMNEZIA_NAMES["${key}"]="${val}"
+    done <<<"${parsed}"
+    return 0
+}
+
+# For a peer absent from names.map, import Amnezia's clientName. Existing map
+# entries are never overwritten, so names.map also remains a manual override.
+discover_peer_name() {
     local peer="$1"
-    local existing
+    local existing name tmp names_dir
+
     existing="$(peer_name "${peer}")"
     if [[ -n "${existing}" ]]; then
         echo "${existing}"
         return 0
     fi
 
-    local label="${UNKNOWN_LABEL}"
-    local n=1
-    local used
-    while true; do
-        used=0
-        for k in "${!PEER_NAMES[@]}"; do
-            if [[ "${PEER_NAMES[${k}]}" == "${label}" ]]; then
-                used=1
-                break
-            fi
-        done
-        (( used == 0 )) && break
-        n=$((n + 1))
-        label="${UNKNOWN_LABEL}-${n}"
-    done
+    if ! load_amnezia_names; then
+        echo ""
+        return 0
+    fi
+    name="${AMNEZIA_NAMES[${peer}]:-}"
+    if [[ -z "${name}" ]]; then
+        echo ""
+        return 0
+    fi
 
-    touch "${NAMES}"
-    printf '%s:%s\n' "${peer}" "${label}" >>"${NAMES}"
-    PEER_NAMES["${peer}"]="${label}"
-    log "names.map: added ${peer} → ${label}"
-    echo "${label}"
+    names_dir="$(dirname "${NAMES}")"
+    mkdir -p "${names_dir}"
+    tmp="$(mktemp "${names_dir}/.names.map.XXXXXX")"
+    if [[ -f "${NAMES}" ]]; then
+        cat "${NAMES}" >"${tmp}"
+    fi
+    printf '%s:%s\n' "${peer}" "${name}" >>"${tmp}"
+    chmod 0644 "${tmp}"
+    mv "${tmp}" "${NAMES}"
+
+    PEER_NAMES["${peer}"]="${name}"
+    touch "${CHANGED}"
+    log "names.map: imported ${peer} → ${name} from Amnezia clientsTable"
+    echo "${name}"
 }
 
 init_history() {
@@ -278,6 +312,8 @@ declare -A CURRENT_HS=()
 declare -A CURRENT_DRX=()
 declare -A CURRENT_DTX=()
 declare -A CURRENT_INTERVAL=()
+declare -A AMNEZIA_NAMES=()
+AMNEZIA_NAMES_LOADED=0
 
 mapfile -t DUMP_LINES < <(get_dump)
 (( ${#DUMP_LINES[@]} > 0 )) || die "empty wg dump"
@@ -300,6 +336,12 @@ while IFS=$'\t' read -r peer _psk _endpoint allowed_ips handshake rx tx _keepali
     CURRENT_DTX["${peer}"]=0
     CURRENT_INTERVAL["${peer}"]=0
 
+    # A new peer is named immediately on first observation. clientsTable is
+    # fetched lazily and at most once per collector cycle.
+    if [[ -z "${PEER_NAMES[${peer}]:-}" ]]; then
+        discover_peer_name "${peer}" >/dev/null || true
+    fi
+
     if [[ -z "${LAST_RX[${peer}]:-}" ]]; then
         continue
     fi
@@ -316,8 +358,7 @@ while IFS=$'\t' read -r peer _psk _endpoint allowed_ips handshake rx tx _keepali
         continue
     fi
 
-    # Traffic seen — ensure names.map has an entry (auto "неизвестный")
-    name="$(ensure_peer_name "${peer}")"
+    name="$(peer_name "${peer}")"
     printf '%s;%s;%s;%s;%s;%s;%s;%s;%s;%s\n' \
         "${NOW}" "${DATE}" "${TIME}" "${peer}" "${name}" \
         "${allowed_ips:-}" "${drx}" "${dtx}" "${interval}" "${handshake}" >>"${tmp_history}"
