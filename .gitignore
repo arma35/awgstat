@@ -3,6 +3,7 @@ __pycache__/
 .changed
 .lock
 .last_backup
+.client_names.sha256
 .names_mtime
 history.csv
 last.db

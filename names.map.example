@@ -1,4 +1,0 @@
-# peer_public_key:display_name
-# Public keys are base64 and often end with '=' — separator is ':' (colon).
-# Example:
-# AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdeFg=:phone

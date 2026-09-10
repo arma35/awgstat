@@ -2,7 +2,7 @@
 # AWGStat configuration
 ########################################
 
-VERSION="2.3.4"
+VERSION="2.4.0"
 
 # Docker container with AmneziaWG
 CONTAINER="amnezia-awg2"
@@ -10,9 +10,8 @@ CONTAINER="amnezia-awg2"
 # WireGuard interface inside container
 WG_INTERFACE="awg0"
 
-# Amnezia client metadata inside the container. When enabled, AWGStat imports
-# clientId -> clientName for peers that are not yet present in names.map.
-AUTO_DISCOVER_NAMES=1
+# Authoritative Amnezia client metadata inside the container.
+# clientId is the WireGuard public key; userData.clientName is the display name.
 AMNEZIA_CLIENTS_TABLE="/opt/amnezia/awg/clientsTable"
 
 # Project directory on host
@@ -21,7 +20,6 @@ WORKDIR="/opt/wgstats"
 # Data files
 HISTORY="${WORKDIR}/history.csv"
 LASTDB="${WORKDIR}/last.db"
-NAMES="${WORKDIR}/names.map"
 CHANGED="${WORKDIR}/.changed"
 ONLINE_STATE="${WORKDIR}/online.csv"
 
