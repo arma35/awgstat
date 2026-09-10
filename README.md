@@ -13,8 +13,9 @@ Generated reports include:
 - a minute-updated online report with collector freshness, current peer state,
   RX/TX rates, today/month/rolling-30-day totals, recent rankings, and
   total/per-user time-series graphs;
-- an interactive total-traffic graph with 60-minute, 6-hour, 12-hour,
-  24-hour, and custom date/time ranges;
+- interactive total and per-user traffic graphs with 60-minute, 6-hour,
+  12-hour, 24-hour, 7-day, 30-day, previous-calendar-month, and custom
+  date/time ranges;
 - classic `DDMonYYYY-DDMonYYYY` report directories;
 - a `Top users` table with `NUM`, date/time and graph links, `USERID`,
   `USERIP`, `CONNECT`, RX/TX, bytes, percentage, total, and average rows;
@@ -28,7 +29,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.3.2**
+See [`VERSION`](VERSION). Current: **2.3.3**
 
 ## Requirements
 
@@ -40,9 +41,9 @@ See [`VERSION`](VERSION). Current: **2.3.2**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.2/awgstat-2.3.2.tar.gz
-tar -xzf awgstat-2.3.2.tar.gz
-cd awgstat-2.3.2
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.3/awgstat-2.3.3.tar.gz
+tar -xzf awgstat-2.3.3.tar.gz
+cd awgstat-2.3.3
 sudo bash install.sh
 ```
 
@@ -140,11 +141,13 @@ The current-peers table shows per-user totals for `TODAY` and `THIS MONTH` in
 AWGStat history. `WG COUNTERS` remains the kernel counter since the WireGuard
 interface was created and can reset when that interface is recreated.
 
-The total-traffic graph has preset ranges for the last 60 minutes, 6 hours,
-12 hours, and 24 hours. `CUSTOM DATE / TIME` accepts explicit `FROM` and `TO`
-values in the browser's local timezone. Presets use pre-rendered SVG files;
-custom ranges are rendered locally from a compact, aggregate-only history
-file and do not expose peer identities.
+Both the total ONLINE graph and each ONLINE user graph have the same period
+selector: last 60 minutes, 6 hours, 12 hours, 24 hours, 7 days, 30 days,
+`PREVIOUS MONTH`, and `CUSTOM DATE / TIME`. `PREVIOUS MONTH` means the complete
+previous calendar month in `REPORT_TZ` (for example, during September it is
+August 1 through August 31). Long and custom ranges are rendered in the browser
+from compact per-minute rate data; per-user pages receive only that user's
+history data.
 
 Graphs and recent rankings use actual AWGStat traffic intervals. Missing
 minutes are rendered as zero. No site, URL, or application data is inferred.
@@ -186,6 +189,7 @@ online/
 ├── traffic-1440-<timestamp>.svg
 └── <peer-id>/
     ├── index.html
+    ├── traffic-history.json
     └── traffic-<timestamp>.svg
 ```
 
@@ -199,7 +203,7 @@ it only after all pages are ready. Files outside `index.html`, `style.css`,
 ```
 wgstats.sh           # collector
 awgstat-cycle.sh     # serialized minute collection + report publication
-htmlgen.py           # HTML generator entry point
+htmlgen.py           # HTML generator entry point + ONLINE period enhancement
 reportgen.py         # SARG-style report implementation
 amnezia_names.py     # parse Amnezia clientsTable for automatic peer names
 online.js            # interactive ONLINE graph period selector
