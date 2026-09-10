@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 import tempfile
@@ -79,6 +80,65 @@ def _extended_options(bounds: dict[str, tuple[int, int]]) -> str:
     return "".join(options)
 
 
+def _traffic_table_markup() -> str:
+    return (
+        '<div id="traffic-table-title" class="online-section">TRAFFIC VOLUME</div>'
+        '<div class="report report-scroll">'
+        '<table id="traffic-period-table" cellpadding="1" cellspacing="2">'
+        '<thead><tr>'
+        '<th class="header_l">PERIOD</th>'
+        '<th class="header_l">RX</th>'
+        '<th class="header_l">TX</th>'
+        '<th class="header_l">TOTAL</th>'
+        '</tr></thead>'
+        '<tbody id="traffic-period-table-body">'
+        '<tr><td class="data3" colspan="4">Loading traffic data…</td></tr>'
+        '</tbody>'
+        '<tfoot id="traffic-period-table-total"></tfoot>'
+        '</table></div>'
+    )
+
+
+def _render_history_data(
+    rows: list[reportgen.HistoryRow],
+    now: datetime,
+) -> str:
+    """Render per-minute rates plus exact byte totals for graph/table clients."""
+    buckets: dict[int, list[float | int]] = defaultdict(
+        lambda: [0.0, 0.0, 0, 0]
+    )
+    for row in rows:
+        if row.timestamp > now or row.total <= 0:
+            continue
+        minute = int(row.timestamp.timestamp()) // 60 * 60
+        interval = row.interval if row.interval > 0 else 60
+        bucket = buckets[minute]
+        bucket[0] = float(bucket[0]) + row.rx_bytes / interval
+        bucket[1] = float(bucket[1]) + row.tx_bytes / interval
+        bucket[2] = int(bucket[2]) + row.rx_bytes
+        bucket[3] = int(bucket[3]) + row.tx_bytes
+
+    points = [
+        (
+            minute,
+            round(float(values[0]), 3),
+            round(float(values[1]), 3),
+            int(values[2]),
+            int(values[3]),
+        )
+        for minute, values in sorted(buckets.items())
+    ]
+    payload = {
+        "version": 2,
+        "generated": int(now.timestamp()),
+        "timezone": str(now.tzinfo or ""),
+        "first": points[0][0] if points else None,
+        "last": points[-1][0] if points else None,
+        "points": points,
+    }
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":")) + "\n"
+
+
 def _enhance_global_page(index_path: Path, bounds: dict[str, tuple[int, int]]) -> None:
     if not index_path.exists():
         return
@@ -96,6 +156,13 @@ def _enhance_global_page(index_path: Path, bounds: dict[str, tuple[int, int]]) -
         count=1,
     )
     page = page.replace(marker, _extended_options(bounds) + marker, 1)
+
+    if 'id="traffic-period-table"' not in page:
+        top_marker = '<div class="online-section">TOP TRAFFIC'
+        position = page.find(top_marker)
+        if position >= 0:
+            page = page[:position] + _traffic_table_markup() + page[position:]
+
     _atomic_write_text(index_path, page)
 
 
@@ -157,6 +224,11 @@ def _enhance_user_page(
         return
     page = page_path.read_text(encoding="utf-8")
     if 'id="traffic-period"' in page:
+        if 'id="traffic-period-table"' not in page:
+            marker = '<div class="online-section">RECENT TRAFFIC INTERVALS</div>'
+            if marker in page:
+                page = page.replace(marker, _traffic_table_markup() + marker, 1)
+                _atomic_write_text(page_path, page)
         return
 
     marker = '<div class="online-section">TRAFFIC RATE</div>'
@@ -182,6 +254,7 @@ def _enhance_user_page(
         'TRAFFIC RATE — LAST 60 MINUTES</div>'
         + controls
         + graph
+        + _traffic_table_markup()
         + '<script type="text/javascript" src="../graph-controls.js"></script>'
     )
     page, count = graph_block.subn(replacement, page, count=1)
@@ -209,6 +282,13 @@ def enhance_online_reports() -> None:
     rows = reportgen.read_history(history_path, tz)
     snapshot = reportgen.read_online_state(online_state_path, tz)
 
+    # Version 2 retains the rate points used by the graph and adds exact RX/TX
+    # bytes, allowing the browser to build interval totals without approximation.
+    _atomic_write_text(
+        online_root / "traffic-history.json",
+        _render_history_data(rows, now),
+    )
+
     rows_by_peer: dict[str, list[reportgen.HistoryRow]] = defaultdict(list)
     for row in rows:
         rows_by_peer[row.peer].append(row)
@@ -221,7 +301,7 @@ def enhance_online_reports() -> None:
             continue
         _atomic_write_text(
             user_root / "traffic-history.json",
-            reportgen.render_online_graph_data(rows_by_peer.get(peer_id, []), now),
+            _render_history_data(rows_by_peer.get(peer_id, []), now),
         )
         _enhance_user_page(user_root / "index.html", now, bounds)
 

@@ -11,6 +11,9 @@
   var title = document.getElementById("traffic-rate-title");
   var image = document.getElementById("traffic-graph-image");
   var customGraph = document.getElementById("traffic-custom-graph");
+  var tableTitle = document.getElementById("traffic-table-title");
+  var tableBody = document.getElementById("traffic-period-table-body");
+  var tableTotal = document.getElementById("traffic-period-table-total");
   var graphData = null;
 
   if (!select || !customPeriod || !fromInput || !toInput ||
@@ -53,6 +56,18 @@
     return {from: fromEpoch, to: toEpoch};
   }
 
+  function staticBounds(option, data) {
+    var minutes = Number(option.value);
+    var end = Number(data && data.generated);
+    if (!Number.isFinite(end) || end <= 0) {
+      end = Math.floor(Date.now() / 1000);
+    }
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      return null;
+    }
+    return {from: end - minutes * 60, to: end};
+  }
+
   function showStaticPreset(option) {
     var source = option.getAttribute("data-graph-src");
     if (source) {
@@ -64,6 +79,23 @@
     title.textContent = "TRAFFIC RATE — " + option.textContent;
     setStatus("", false);
     replaceQuery({graph: select.value});
+
+    loadGraphData()
+      .then(function (data) {
+        var bounds = staticBounds(option, data);
+        if (bounds) {
+          renderTrafficTable(
+            data.points,
+            bounds.from,
+            bounds.to,
+            option.value,
+            option.textContent
+          );
+        }
+      })
+      .catch(function (error) {
+        renderTableMessage("Unable to load traffic table: " + error.message);
+      });
   }
 
   function svgElement(name, attributes, text) {
@@ -79,6 +111,20 @@
 
   function formatRate(value) {
     var units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"];
+    var size = Math.max(Number(value) || 0, 0);
+    var unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit += 1;
+    }
+    if (unit === 0) {
+      return Math.round(size) + " " + units[unit];
+    }
+    return size.toFixed(1) + " " + units[unit];
+  }
+
+  function formatBytes(value) {
+    var units = ["B", "KB", "MB", "GB", "TB", "PB"];
     var size = Math.max(Number(value) || 0, 0);
     var unit = 0;
     while (size >= 1024 && unit < units.length - 1) {
@@ -252,12 +298,142 @@
         return response.json();
       })
       .then(function (data) {
-        if (data.version !== 1 || !Array.isArray(data.points)) {
+        if ((data.version !== 1 && data.version !== 2) || !Array.isArray(data.points)) {
           throw new Error("unsupported graph data");
         }
         graphData = data;
         return data;
       });
+  }
+
+  function pointBytes(point) {
+    var rxBytes = Number(point[3]);
+    var txBytes = Number(point[4]);
+    if (Number.isFinite(rxBytes) && Number.isFinite(txBytes)) {
+      return {
+        rx: Math.max(rxBytes, 0),
+        tx: Math.max(txBytes, 0)
+      };
+    }
+    return {
+      rx: Math.max((Number(point[1]) || 0) * 60, 0),
+      tx: Math.max((Number(point[2]) || 0) * 60, 0)
+    };
+  }
+
+  function tableBucketSeconds(periodValue, duration) {
+    if (periodValue === "60") {
+      return 5 * 60;
+    }
+    if (periodValue === "10080" || periodValue === "43200" ||
+        periodValue === "previous-month") {
+      return 24 * 60 * 60;
+    }
+    if (periodValue === "custom") {
+      return duration <= 24 * 60 * 60 ? 60 * 60 : 24 * 60 * 60;
+    }
+    return 60 * 60;
+  }
+
+  function formatDateTime(epoch) {
+    var value = new Date(epoch * 1000);
+    return pad(value.getDate()) + "/" + pad(value.getMonth() + 1) + "/" +
+      value.getFullYear() + " " + pad(value.getHours()) + ":" + pad(value.getMinutes());
+  }
+
+  function formatDay(epoch) {
+    var value = new Date(epoch * 1000);
+    return pad(value.getDate()) + "/" + pad(value.getMonth() + 1) + "/" + value.getFullYear();
+  }
+
+  function tablePeriodLabel(start, end, bucketSeconds) {
+    if (bucketSeconds >= 24 * 60 * 60) {
+      return formatDay(start);
+    }
+    return formatDateTime(start) + " — " + formatDateTime(end);
+  }
+
+  function clearNode(node) {
+    while (node && node.firstChild) {
+      node.removeChild(node.firstChild);
+    }
+  }
+
+  function addCell(row, text, className, tagName) {
+    var cell = document.createElement(tagName || "td");
+    cell.className = className || "data";
+    cell.textContent = text;
+    row.appendChild(cell);
+  }
+
+  function renderTableMessage(message) {
+    if (!tableBody) {
+      return;
+    }
+    clearNode(tableBody);
+    var row = document.createElement("tr");
+    var cell = document.createElement("td");
+    cell.className = "data3";
+    cell.colSpan = 4;
+    cell.textContent = message;
+    row.appendChild(cell);
+    tableBody.appendChild(row);
+    clearNode(tableTotal);
+  }
+
+  function renderTrafficTable(points, fromEpoch, toEpoch, periodValue, label) {
+    if (!tableBody || !Number.isFinite(fromEpoch) || !Number.isFinite(toEpoch) ||
+        fromEpoch >= toEpoch) {
+      return;
+    }
+
+    var duration = toEpoch - fromEpoch;
+    var bucketSeconds = tableBucketSeconds(periodValue, duration);
+    var bucketCount = Math.max(1, Math.ceil(duration / bucketSeconds));
+    var buckets = new Array(bucketCount).fill(null).map(function () {
+      return {rx: 0, tx: 0};
+    });
+
+    points.forEach(function (point) {
+      var epoch = Number(point[0]);
+      if (!Number.isFinite(epoch) || epoch < fromEpoch || epoch > toEpoch) {
+        return;
+      }
+      var index = Math.floor((epoch - fromEpoch) / bucketSeconds);
+      index = Math.min(Math.max(index, 0), bucketCount - 1);
+      var bytes = pointBytes(point);
+      buckets[index].rx += bytes.rx;
+      buckets[index].tx += bytes.tx;
+    });
+
+    clearNode(tableBody);
+    var totalRx = 0;
+    var totalTx = 0;
+    buckets.forEach(function (bucket, index) {
+      var start = fromEpoch + index * bucketSeconds;
+      var end = Math.min(start + bucketSeconds, toEpoch);
+      totalRx += bucket.rx;
+      totalTx += bucket.tx;
+      var row = document.createElement("tr");
+      addCell(row, tablePeriodLabel(start, end, bucketSeconds), "data2");
+      addCell(row, formatBytes(bucket.rx), "data");
+      addCell(row, formatBytes(bucket.tx), "data");
+      addCell(row, formatBytes(bucket.rx + bucket.tx), "data");
+      tableBody.appendChild(row);
+    });
+
+    if (tableTitle) {
+      tableTitle.textContent = "TRAFFIC VOLUME — " + label;
+    }
+    if (tableTotal) {
+      clearNode(tableTotal);
+      var totalRow = document.createElement("tr");
+      addCell(totalRow, "TOTAL", "header_l", "th");
+      addCell(totalRow, formatBytes(totalRx), "header_r", "th");
+      addCell(totalRow, formatBytes(totalTx), "header_r", "th");
+      addCell(totalRow, formatBytes(totalRx + totalTx), "header_r", "th");
+      tableTotal.appendChild(totalRow);
+    }
   }
 
   function showDynamicPreset(option) {
@@ -277,6 +453,13 @@
           bounds.to,
           rangeTitle(label, bounds.from, bounds.to)
         );
+        renderTrafficTable(
+          data.points,
+          bounds.from,
+          bounds.to,
+          option.value,
+          label
+        );
         title.textContent = "TRAFFIC RATE — " + label;
         setStatus(
           new Date(bounds.from * 1000).toLocaleString() +
@@ -288,6 +471,7 @@
       .catch(function (error) {
         image.style.display = "block";
         customGraph.style.display = "none";
+        renderTableMessage("Unable to load traffic table: " + error.message);
         setStatus("Unable to load graph history: " + error.message, true);
       });
   }
@@ -300,12 +484,20 @@
     if (!Number.isFinite(fromEpoch) || !Number.isFinite(toEpoch) ||
         fromEpoch >= toEpoch) {
       setStatus("FROM must be earlier than TO", true);
+      renderTableMessage("FROM must be earlier than TO");
       return;
     }
     setStatus("Loading history…", false);
     loadGraphData()
       .then(function (data) {
         drawCustom(data.points, fromEpoch, toEpoch, customTitle(fromEpoch, toEpoch));
+        renderTrafficTable(
+          data.points,
+          fromEpoch,
+          toEpoch,
+          "custom",
+          "CUSTOM DATE / TIME"
+        );
         title.textContent = "TRAFFIC RATE — CUSTOM DATE / TIME";
         setStatus(
           "CUSTOM · " + new Date(fromEpoch * 1000).toLocaleString() +
@@ -321,6 +513,7 @@
       .catch(function (error) {
         image.style.display = "block";
         customGraph.style.display = "none";
+        renderTableMessage("Unable to load traffic table: " + error.message);
         setStatus("Unable to load graph history: " + error.message, true);
       });
   }
