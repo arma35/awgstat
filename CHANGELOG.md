@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.3.4] — 2026-09-10
+
+### Added
+- A traffic-volume table under the total ONLINE graph and every ONLINE user graph.
+- Exact RX/TX byte totals in `traffic-history.json` alongside the existing rate points.
+- JavaScript syntax validation (`node --check online.js`) in the release workflow.
+
+### Changed
+- `LAST 60 MINUTES` is shown as 12 five-minute traffic rows.
+- `LAST 6 HOURS`, `LAST 12 HOURS` and `LAST 24 HOURS` are shown hourly.
+- `LAST 7 DAYS`, `LAST 30 DAYS` and `PREVIOUS MONTH` are shown daily.
+- Custom periods up to and including 24 hours are shown hourly; longer custom
+  periods are shown daily.
+- Traffic tables include zero buckets and an exact RX/TX/TOTAL summary row.
+
 ## [2.3.3] — 2026-09-10
 
 ### Added
