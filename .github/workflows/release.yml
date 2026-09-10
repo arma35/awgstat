@@ -89,6 +89,13 @@ jobs:
           python3 -m py_compile htmlgen.py reportgen.py amnezia_names.py
           python3 -m unittest discover -s tests -v
 
+      - name: Validate JavaScript
+        if: steps.immutable.outputs.release_exists != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check online.js
+
       - name: Build release archive
         if: steps.immutable.outputs.release_exists != 'true'
         env:
