@@ -29,13 +29,13 @@ class AmneziaNamesTests(unittest.TestCase):
         '''
         self.assertEqual(parse_clients_table(payload), {"peer-b=": "phone"})
 
-    def test_sanitizes_name_for_names_map(self) -> None:
+    def test_sanitizes_name_for_history_and_online_csv(self) -> None:
         payload = r'''
         [
-          {"clientId": "peer-a=", "userData": {"clientName": "  Admin\n# nitro  "}}
+          {"clientId": "peer-a=", "userData": {"clientName": "  Admin;\n nitro  "}}
         ]
         '''
-        self.assertEqual(parse_clients_table(payload), {"peer-a=": "Admin nitro"})
+        self.assertEqual(parse_clients_table(payload), {"peer-a=": "Admin, nitro"})
 
     def test_rejects_non_array_root(self) -> None:
         with self.assertRaises(ValueError):
