@@ -10,8 +10,8 @@ from typing import Any
 def _clean_name(value: Any) -> str:
     if value is None:
         return ""
-    # names.map treats '#' as a comment marker and cannot store line breaks/tabs.
-    return " ".join(str(value).replace("#", " ").split())
+    # History/online state are semicolon-delimited; names must also be one line.
+    return " ".join(str(value).replace(";", ",").split())
 
 
 def parse_clients_table(payload: str) -> dict[str, str]:
