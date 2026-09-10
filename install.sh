@@ -21,7 +21,7 @@ fix_crlf() {
     sed -i 's/\r$//' "${f}"
 }
 
-for f in install.sh backup.sh wgstats.sh awgstat-cycle.sh htmlgen.py reportgen.py amnezia_names.py online.js config cron/awgstat VERSION; do
+for f in install.sh update.sh backup.sh wgstats.sh awgstat-cycle.sh htmlgen.py reportgen.py amnezia_names.py online.js config cron/awgstat VERSION; do
     fix_crlf "${SRC}/${f}"
 done
 
@@ -37,6 +37,7 @@ install -m 0644 "${SRC}/reportgen.py" "${DEST}/reportgen.py"
 install -m 0755 "${SRC}/amnezia_names.py" "${DEST}/amnezia_names.py"
 install -m 0644 "${SRC}/online.js" "${DEST}/online.js"
 install -m 0755 "${SRC}/backup.sh" "${DEST}/backup.sh"
+install -m 0755 "${SRC}/update.sh" "${DEST}/update.sh"
 install -m 0644 "${SRC}/style.css" "${DEST}/style.css"
 install -m 0644 "${SRC}/VERSION" "${DEST}/VERSION"
 install -m 0644 "${SRC}/names.map.example" "${DEST}/names.map.example"
@@ -141,6 +142,7 @@ echo "  code:    ${DEST}"
 echo "  webroot: ${WEBROOT}"
 echo "  tz:      ${REPORT_TZ}"
 echo "  cron:    ${CRON_DST}  (not visible in crontab -l — use: cat ${CRON_DST})"
+echo "  updater: ${DEST}/update.sh"
 echo "  preserved: names.map history.csv last.db backups/ config(local keys)"
 echo "--- cron jobs ---"
 cat "${CRON_DST}"
