@@ -16,6 +16,10 @@ Generated reports include:
 - interactive total and per-user traffic graphs with 60-minute, 6-hour,
   12-hour, 24-hour, 7-day, 30-day, previous-calendar-month, and custom
   date/time ranges;
+- a traffic-volume table under every ONLINE graph, using 5-minute rows for the
+  60-minute view, hourly rows for 6/12/24-hour views and custom ranges up to
+  24 hours, and daily rows for 7/30-day, previous-month and longer custom
+  ranges;
 - classic `DDMonYYYY-DDMonYYYY` report directories;
 - a `Top users` table with `NUM`, date/time and graph links, `USERID`,
   `USERIP`, `CONNECT`, RX/TX, bytes, percentage, total, and average rows;
@@ -29,7 +33,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.3.3**
+See [`VERSION`](VERSION). Current: **2.3.4**
 
 ## Requirements
 
@@ -41,9 +45,9 @@ See [`VERSION`](VERSION). Current: **2.3.3**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.3/awgstat-2.3.3.tar.gz
-tar -xzf awgstat-2.3.3.tar.gz
-cd awgstat-2.3.3
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.4/awgstat-2.3.4.tar.gz
+tar -xzf awgstat-2.3.4.tar.gz
+cd awgstat-2.3.4
 sudo bash install.sh
 ```
 
@@ -67,7 +71,7 @@ every 5 minutes, forced HTML rebuild at 00:01 UTC+3, backup check daily at
 ## Releases
 
 Every published change increments `VERSION`. A push to `main` runs the GitHub
-Actions release workflow, validates shell/Python code, builds
+Actions release workflow, validates shell/Python/JavaScript code, builds
 `awgstat-<version>.tar.gz` plus SHA-256 checksum, creates tag `v<version>`, and
 publishes an immutable GitHub Release. Reusing a version whose tag points to a
 different commit is rejected.
@@ -117,6 +121,10 @@ acts as a permanent local override. If the client is not present in
 `clientsTable`, AWGStat leaves it unnamed and retries on a later cycle instead
 of writing a permanent `неизвестный` placeholder.
 
+Removing a line from `names.map` does **not** revoke VPN access. VPN clients must
+be revoked in Amnezia server management; AWGStat keeps historical traffic until
+it expires according to `RETENTION_DAYS`.
+
 ## Backup
 
 ```bash
@@ -146,8 +154,20 @@ selector: last 60 minutes, 6 hours, 12 hours, 24 hours, 7 days, 30 days,
 `PREVIOUS MONTH`, and `CUSTOM DATE / TIME`. `PREVIOUS MONTH` means the complete
 previous calendar month in `REPORT_TZ` (for example, during September it is
 August 1 through August 31). Long and custom ranges are rendered in the browser
-from compact per-minute rate data; per-user pages receive only that user's
-history data.
+from compact per-minute data; per-user pages receive only that user's history.
+
+Each ONLINE graph has a traffic-volume table directly below it. The table uses:
+
+- `LAST 60 MINUTES`: 12 rows of 5 minutes;
+- `LAST 6/12/24 HOURS`: one row per hour;
+- `LAST 7 DAYS`, `LAST 30 DAYS`, `PREVIOUS MONTH`: one row per day;
+- custom ranges up to and including 24 hours: one row per hour;
+- custom ranges longer than 24 hours: one row per day.
+
+The JSON feeding the browser keeps the existing RX/TX rate values and also
+contains exact RX/TX byte totals for each non-zero minute, so table totals do
+not have to be estimated from graph rates. Empty buckets are shown as zero and
+a `TOTAL` row summarizes the selected range.
 
 Graphs and recent rankings use actual AWGStat traffic intervals. Missing
 minutes are rendered as zero. No site, URL, or application data is inferred.
@@ -203,10 +223,10 @@ it only after all pages are ready. Files outside `index.html`, `style.css`,
 ```
 wgstats.sh           # collector
 awgstat-cycle.sh     # serialized minute collection + report publication
-htmlgen.py           # HTML generator entry point + ONLINE period enhancement
+htmlgen.py           # HTML generator entry point + ONLINE period/table enhancement
 reportgen.py         # SARG-style report implementation
 amnezia_names.py     # parse Amnezia clientsTable for automatic peer names
-online.js            # interactive ONLINE graph period selector
+online.js            # interactive ONLINE graph + traffic-table controls
 backup.sh            # data backup
 update.sh            # release updater (installed to /opt/wgstats since 2.3.2)
 config               # settings
