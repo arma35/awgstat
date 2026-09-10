@@ -33,7 +33,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.3.4**
+See [`VERSION`](VERSION). Current: **2.4.0**
 
 ## Requirements
 
@@ -45,9 +45,9 @@ See [`VERSION`](VERSION). Current: **2.3.4**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.4/awgstat-2.3.4.tar.gz
-tar -xzf awgstat-2.3.4.tar.gz
-cd awgstat-2.3.4
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.4.0/awgstat-2.4.0.tar.gz
+tar -xzf awgstat-2.4.0.tar.gz
+cd awgstat-2.4.0
 sudo bash install.sh
 ```
 
@@ -61,7 +61,10 @@ sudo /opt/wgstats/update.sh <version>
 
 Cron lives in **`/etc/cron.d/awgstat`** (system), not in `crontab -l`. Check with `cat /etc/cron.d/awgstat`.
 
-Upgrade **does not** overwrite: `names.map`, `history.csv`, `last.db`, `backups/`, or your local `config` values (only bumps `VERSION` and adds new keys if missing).
+Upgrade **does not** overwrite: `history.csv`, `last.db`, `backups/`, or your
+local config values. AWGStat 2.4 removes the obsolete `NAMES` and
+`AUTO_DISCOVER_NAMES` config keys. If an old `/opt/wgstats/names.map` remains
+on disk, it is left untouched but ignored.
 
 Default install path: `/opt/wgstats`  
 Cron: serialized collection + online publication every minute, archive refresh
@@ -83,8 +86,7 @@ different commit is rejected.
 | `VERSION` | Package version |
 | `CONTAINER` | Docker container name |
 | `WG_INTERFACE` | Interface inside container |
-| `AUTO_DISCOVER_NAMES` | Import missing peer names from Amnezia `clientsTable` (`1` = enabled) |
-| `AMNEZIA_CLIENTS_TABLE` | Path to Amnezia client metadata inside the container |
+| `AMNEZIA_CLIENTS_TABLE` | Authoritative Amnezia client metadata inside the container |
 | `WEBROOT` | HTML output directory |
 | `TITLE` | Page title |
 | `RETENTION_DAYS` | History retention |
@@ -102,27 +104,41 @@ different commit is rejected.
 | `BACKUP_DIR` | Where `.tar.gz` backups are stored |
 | `LAST_BACKUP` | Timestamp file of last successful backup |
 
-Map peer public keys to names in `names.map` (**colon** separator — keys often end with `=`):
+## Client names
 
+AWGStat 2.4 does not maintain `names.map`.
+
+The current display name is read directly from Amnezia's
+`/opt/amnezia/awg/clientsTable`:
+
+```text
+clientId            -> WireGuard public key
+userData.clientName -> display name
 ```
-<base64-public-key>:phone
-```
 
-### Automatic names from Amnezia
+Name resolution is intentionally simple:
 
-With `AUTO_DISCOVER_NAMES=1` (default), the collector checks each peer seen in
-the current WireGuard dump. If its public key is absent from `names.map`,
-AWGStat reads `/opt/amnezia/awg/clientsTable` from the Amnezia container and
-imports the matching `clientId -> userData.clientName` pair.
+1. if the public key exists in the current Amnezia `clientsTable`, the current
+   `clientName` is displayed everywhere, including historical reports;
+2. if the peer has been revoked and no longer exists in `clientsTable`, AWGStat
+   displays the last non-empty name already stored with that peer in
+   `history.csv`;
+3. if neither source has a name, the report falls back to an unknown/peer
+   identifier.
 
-The Amnezia table is fetched lazily and at most once per collector cycle.
-Existing `names.map` entries are never overwritten, so a manually edited name
-acts as a permanent local override. If the client is not present in
-`clientsTable`, AWGStat leaves it unnamed and retries on a later cycle instead
-of writing a permanent `неизвестный` placeholder.
+This means renaming an existing Amnezia client changes its displayed name in
+AWGStat without rewriting traffic history. Revoking a client does not delete
+its historical traffic. A newly created client with the same human-readable
+name is still a different user because traffic identity is the WireGuard public
+key, not `clientName`.
 
-Removing a line from `names.map` does **not** revoke VPN access. VPN clients must
-be revoked in Amnezia server management; AWGStat keeps historical traffic until
+The collector stores the current Amnezia name together with each traffic delta
+and writes it into the current online snapshot. A small internal fingerprint of
+current `clientId -> clientName` pairs is used only to trigger a report rebuild
+when a client is added, renamed or revoked; it is not a user-managed name map.
+
+Removing a client from AWGStat files does **not** revoke VPN access. VPN clients
+must be revoked in Amnezia server management. Historical traffic remains until
 it expires according to `RETENTION_DAYS`.
 
 ## Backup
@@ -132,8 +148,9 @@ sudo /opt/wgstats/backup.sh          # only if BACKUP_DAYS elapsed
 sudo /opt/wgstats/backup.sh --force  # always
 ```
 
-Archive contents: `names.map`, `history.csv`, `last.db`, `online.csv`, `config`,
-`VERSION`.
+Archive contents: `history.csv`, `last.db`, `online.csv`, `config`, `VERSION`.
+Client names do not need a separate backup: current names live in Amnezia and
+last-known names are already present in `history.csv`.
 
 ## Online report semantics
 
@@ -164,10 +181,10 @@ Each ONLINE graph has a traffic-volume table directly below it. The table uses:
 - custom ranges up to and including 24 hours: one row per hour;
 - custom ranges longer than 24 hours: one row per day.
 
-The JSON feeding the browser keeps the existing RX/TX rate values and also
-contains exact RX/TX byte totals for each non-zero minute, so table totals do
-not have to be estimated from graph rates. Empty buckets are shown as zero and
-a `TOTAL` row summarizes the selected range.
+The JSON feeding the browser keeps RX/TX rate values and also contains exact
+RX/TX byte totals for each non-zero minute, so table totals do not have to be
+estimated from graph rates. Empty buckets are shown as zero and a `TOTAL` row
+summarizes the selected range.
 
 Graphs and recent rankings use actual AWGStat traffic intervals. Missing
 minutes are rendered as zero. No site, URL, or application data is inferred.
@@ -220,18 +237,17 @@ it only after all pages are ready. Files outside `index.html`, `style.css`,
 
 ## Layout
 
-```
-wgstats.sh           # collector
+```text
+wgstats.sh           # collector; reads live names from Amnezia clientsTable
 awgstat-cycle.sh     # serialized minute collection + report publication
-htmlgen.py           # HTML generator entry point + ONLINE period/table enhancement
+htmlgen.py           # HTML generator entry point + current-name resolution
 reportgen.py         # SARG-style report implementation
-amnezia_names.py     # parse Amnezia clientsTable for automatic peer names
+amnezia_names.py     # parse Amnezia clientsTable
 online.js            # interactive ONLINE graph + traffic-table controls
 backup.sh            # data backup
 update.sh            # release updater (installed to /opt/wgstats since 2.3.2)
 config               # settings
 style.css            # report CSS
-names.map            # peer → name cache/override (local, not in release)
 VERSION
 cron/awgstat
 install.sh
