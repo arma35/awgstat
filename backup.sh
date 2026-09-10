@@ -38,7 +38,6 @@ elapsed=$((NOW - LAST))
 need=$((BACKUP_DAYS * 86400))
 
 if (( FORCE == 0 && LAST > 0 && elapsed < need )); then
-    # Period not reached — silent success for cron
     exit 0
 fi
 
@@ -47,10 +46,10 @@ mkdir -p "${BACKUP_DIR}"
 stamp="$(date -d "@${NOW}" '+%Y%m%d-%H%M%S' 2>/dev/null || date -u -d "@${NOW}" '+%Y%m%d-%H%M%S' 2>/dev/null || date '+%Y%m%d-%H%M%S')"
 archive="${BACKUP_DIR}/awgstat-data-${stamp}.tar.gz"
 
-# Collect existing data files only
+# Client names are authoritative in Amnezia clientsTable and are also retained
+# as last-known values in history.csv, so there is no separate names.map data.
 files=()
 for f in \
-    "${NAMES}" \
     "${HISTORY}" \
     "${LASTDB}" \
     "${ONLINE_STATE}" \
@@ -65,7 +64,6 @@ if (( ${#files[@]} == 0 )); then
     exit 1
 fi
 
-# Store paths relative to WORKDIR / SCRIPT_DIR parents for a clean archive
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
