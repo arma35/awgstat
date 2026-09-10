@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AWGStat HTML generator entry point with extended ONLINE graph periods."""
+"""AWGStat HTML generator entry point with ONLINE graph enhancements."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import html
 import json
 import os
 import re
+import subprocess
 import tempfile
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import reportgen
+from amnezia_names import parse_clients_table
 
 
 EXTRA_PERIODS = (
@@ -58,6 +60,50 @@ def _atomic_write_text(path: Path, content: str) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def _load_current_names(cfg: dict[str, str]) -> dict[str, str]:
+    """Read the authoritative current clientId -> clientName map from Amnezia."""
+    container = cfg.get("CONTAINER", "amnezia-awg2")
+    table = cfg.get("AMNEZIA_CLIENTS_TABLE", "/opt/amnezia/awg/clientsTable")
+    try:
+        completed = subprocess.run(
+            ["docker", "exec", container, "cat", table],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return parse_clients_table(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+        # Rendering must remain available even if Docker/clientsTable is briefly
+        # unavailable. reportgen then falls back to the last name stored in history.
+        return {}
+
+
+def _run_reportgen_with_current_names(current_names: dict[str, str]) -> int:
+    """Run legacy reportgen APIs with live Amnezia names instead of names.map."""
+    original_load_config = reportgen.load_config
+    original_load_names = reportgen.load_names
+    original_names_map_changed = reportgen.names_map_changed
+
+    def compatible_load_config(path=None):
+        cfg = original_load_config(path)
+        # reportgen.main in the 2.x core still creates a Path for NAMES before it
+        # asks load_names(). The normal htmlgen entry point ignores that path and
+        # supplies current Amnezia names directly.
+        cfg.setdefault("NAMES", "${WORKDIR}/.legacy-names.map")
+        return cfg
+
+    reportgen.load_config = compatible_load_config
+    reportgen.load_names = lambda _path: dict(current_names)
+    reportgen.names_map_changed = lambda *_args: False
+    try:
+        return reportgen.main()
+    finally:
+        reportgen.load_config = original_load_config
+        reportgen.load_names = original_load_names
+        reportgen.names_map_changed = original_names_map_changed
 
 
 def _dynamic_option(value: str, label: str, bounds: dict[str, tuple[int, int]]) -> str:
@@ -282,8 +328,6 @@ def enhance_online_reports() -> None:
     rows = reportgen.read_history(history_path, tz)
     snapshot = reportgen.read_online_state(online_state_path, tz)
 
-    # Version 2 retains the rate points used by the graph and adds exact RX/TX
-    # bytes, allowing the browser to build interval totals without approximation.
     _atomic_write_text(
         online_root / "traffic-history.json",
         _render_history_data(rows, now),
@@ -307,7 +351,9 @@ def enhance_online_reports() -> None:
 
 
 def main() -> int:
-    result = reportgen.main()
+    cfg = reportgen.load_config()
+    current_names = _load_current_names(cfg)
+    result = _run_reportgen_with_current_names(current_names)
     if result != 0:
         return result
     enhance_online_reports()
