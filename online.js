@@ -43,8 +43,17 @@
     return select.options[select.selectedIndex];
   }
 
-  function showPreset() {
-    var option = selectedOption();
+  function optionBounds(option) {
+    var fromEpoch = Number(option.getAttribute("data-from-epoch"));
+    var toEpoch = Number(option.getAttribute("data-to-epoch"));
+    if (!Number.isFinite(fromEpoch) || !Number.isFinite(toEpoch) ||
+        fromEpoch >= toEpoch) {
+      return null;
+    }
+    return {from: fromEpoch, to: toEpoch};
+  }
+
+  function showStaticPreset(option) {
     var source = option.getAttribute("data-graph-src");
     if (source) {
       image.src = source;
@@ -92,16 +101,23 @@
     if (spanSeconds <= 86400) {
       return time;
     }
-    return pad(value.getDate()) + "/" + pad(value.getMonth() + 1) + " " + time;
+    if (spanSeconds <= 2678400) {
+      return pad(value.getDate()) + "/" + pad(value.getMonth() + 1) + " " + time;
+    }
+    return pad(value.getDate()) + "/" + pad(value.getMonth() + 1);
   }
 
-  function customTitle(fromEpoch, toEpoch) {
-    return "Custom traffic rate — " +
+  function rangeTitle(label, fromEpoch, toEpoch) {
+    return label + " — " +
       new Date(fromEpoch * 1000).toLocaleString() + " — " +
       new Date(toEpoch * 1000).toLocaleString();
   }
 
-  function drawCustom(points, fromEpoch, toEpoch) {
+  function customTitle(fromEpoch, toEpoch) {
+    return rangeTitle("Custom traffic rate", fromEpoch, toEpoch);
+  }
+
+  function drawCustom(points, fromEpoch, toEpoch, graphTitle) {
     var width = 900;
     var height = 360;
     var left = 76;
@@ -145,7 +161,7 @@
     while (customGraph.firstChild) {
       customGraph.removeChild(customGraph.firstChild);
     }
-    customGraph.appendChild(svgElement("title", {}, customTitle(fromEpoch, toEpoch)));
+    customGraph.appendChild(svgElement("title", {}, graphTitle));
     customGraph.appendChild(svgElement("rect", {
       x: 0, y: 0, width: width, height: height, fill: "white"
     }));
@@ -156,7 +172,7 @@
     });
     group.appendChild(svgElement("text", {
       x: left, y: 17, "font-weight": "bold"
-    }, customTitle(fromEpoch, toEpoch)));
+    }, graphTitle));
 
     for (var step = 0; step <= 5; step += 1) {
       var gridY = top + plotHeight * step / 5;
@@ -244,6 +260,38 @@
       });
   }
 
+  function showDynamicPreset(option) {
+    var bounds = optionBounds(option);
+    if (!bounds) {
+      showStaticPreset(option);
+      return;
+    }
+    customPeriod.style.display = "none";
+    setStatus("Loading history…", false);
+    loadGraphData()
+      .then(function (data) {
+        var label = option.textContent;
+        drawCustom(
+          data.points,
+          bounds.from,
+          bounds.to,
+          rangeTitle(label, bounds.from, bounds.to)
+        );
+        title.textContent = "TRAFFIC RATE — " + label;
+        setStatus(
+          new Date(bounds.from * 1000).toLocaleString() +
+          " — " + new Date(bounds.to * 1000).toLocaleString(),
+          false
+        );
+        replaceQuery({graph: select.value});
+      })
+      .catch(function (error) {
+        image.style.display = "block";
+        customGraph.style.display = "none";
+        setStatus("Unable to load graph history: " + error.message, true);
+      });
+  }
+
   function applyCustom() {
     var fromDate = new Date(fromInput.value);
     var toDate = new Date(toInput.value);
@@ -257,7 +305,7 @@
     setStatus("Loading history…", false);
     loadGraphData()
       .then(function (data) {
-        drawCustom(data.points, fromEpoch, toEpoch);
+        drawCustom(data.points, fromEpoch, toEpoch, customTitle(fromEpoch, toEpoch));
         title.textContent = "TRAFFIC RATE — CUSTOM DATE / TIME";
         setStatus(
           "CUSTOM · " + new Date(fromEpoch * 1000).toLocaleString() +
@@ -278,11 +326,14 @@
   }
 
   function choosePeriod() {
+    var option = selectedOption();
     if (select.value === "custom") {
       customPeriod.style.display = "inline-block";
       applyCustom();
+    } else if (option.getAttribute("data-graph-src")) {
+      showStaticPreset(option);
     } else {
-      showPreset();
+      showDynamicPreset(option);
     }
   }
 
