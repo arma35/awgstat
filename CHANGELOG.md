@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.3.3] — 2026-09-10
+
+### Added
+- `LAST 7 DAYS`, `LAST 30 DAYS` and `PREVIOUS MONTH` presets to the total
+  ONLINE traffic graph.
+- The same graph-period selector on every ONLINE user page, including
+  60 minutes, 6/12/24 hours, 7/30 days, previous calendar month and custom
+  date/time range.
+- Compact per-user `traffic-history.json` files so long and custom ranges can
+  be rendered locally without exposing other peers' traffic.
+
+### Changed
+- `PREVIOUS MONTH` is calculated as the complete previous calendar month in
+  `REPORT_TZ`; during September, for example, it covers August 1 through 31.
+- Long graph ranges are bucketed in the browser to keep SVG rendering compact.
+
 ## [2.3.2] — 2026-09-10
 
 ### Fixed
