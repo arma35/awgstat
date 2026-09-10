@@ -11,15 +11,14 @@ if [[ -z "${VERSION:-}" && -f "${SCRIPT_DIR}/VERSION" ]]; then
 fi
 VERSION="${VERSION:-0.0.0}"
 ONLINE_STATE="${ONLINE_STATE:-${WORKDIR}/online.csv}"
-AUTO_DISCOVER_NAMES="${AUTO_DISCOVER_NAMES:-1}"
 AMNEZIA_CLIENTS_TABLE="${AMNEZIA_CLIENTS_TABLE:-/opt/amnezia/awg/clientsTable}"
 
 LOG_DIR="${WORKDIR}/logs"
 LOG_FILE="${LOG_DIR}/wgstats.log"
 LOCK_FILE="${WORKDIR}/.lock"
+CLIENT_NAMES_FINGERPRINT="${WORKDIR}/.client_names.sha256"
 CSV_VERSION="#WGSTAT:1"
 CSV_HEADER="timestamp;date;time;peer;name;ip;rx_bytes;tx_bytes;interval;handshake"
-UNKNOWN_LABEL="неизвестный"
 
 mkdir -p "${LOG_DIR}"
 
@@ -35,193 +34,42 @@ die() {
 exec 9>"${LOCK_FILE}"
 flock -n 9 || exit 0
 
-# If names.map was edited (no traffic needed), ask htmlgen to redraw
-mark_names_changed() {
-    local stamp="${WORKDIR}/.names_mtime"
-    [[ -f "${NAMES}" ]] || return 0
-    local cur prev
-    cur="$(stat -c '%Y' "${NAMES}" 2>/dev/null || stat -f '%m' "${NAMES}" 2>/dev/null || echo 0)"
-    prev=0
-    [[ -f "${stamp}" ]] && prev="$(tr -d '[:space:]' <"${stamp}" || true)"
-    [[ "${prev}" =~ ^[0-9]+$ ]] || prev=0
-    if (( cur > prev )); then
-        printf '%s\n' "${cur}" >"${stamp}"
+# Amnezia is the authoritative source for current peer names. No names.map is
+# maintained: renamed peers immediately use the current clientName, while
+# revoked peers keep their last known name only in history.csv.
+load_amnezia_names() {
+    declare -gA AMNEZIA_NAMES=()
+
+    local raw parsed normalized key val fingerprint previous
+    if ! raw="$(docker exec "${CONTAINER}" cat "${AMNEZIA_CLIENTS_TABLE}" 2>/dev/null)"; then
+        log "WARNING: cannot read Amnezia clientsTable: ${AMNEZIA_CLIENTS_TABLE}"
+        return 1
+    fi
+    if ! parsed="$(printf '%s' "${raw}" | python3 "${SCRIPT_DIR}/amnezia_names.py" 2>/dev/null)"; then
+        log "WARNING: cannot parse Amnezia clientsTable"
+        return 1
+    fi
+
+    normalized="$(printf '%s\n' "${parsed}" | sed '/^[[:space:]]*$/d' | LC_ALL=C sort)"
+    while IFS=$'\t' read -r key val; do
+        [[ -n "${key}" && -n "${val}" ]] || continue
+        AMNEZIA_NAMES["${key}"]="${val}"
+    done <<<"${normalized}"
+
+    fingerprint="$(printf '%s' "${normalized}" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+    previous=""
+    [[ -f "${CLIENT_NAMES_FINGERPRINT}" ]] && previous="$(tr -d '[:space:]' <"${CLIENT_NAMES_FINGERPRINT}" || true)"
+    if [[ "${fingerprint}" != "${previous}" ]]; then
+        printf '%s\n' "${fingerprint}" >"${CLIENT_NAMES_FINGERPRINT}"
         touch "${CHANGED}"
-        log "names.map changed → schedule HTML rebuild"
+        log "Amnezia client names changed → schedule HTML rebuild"
     fi
-}
-
-# names.map format: <wireguard-pubkey>:<display_name>
-# Pubkeys are base64 and often end with '=' — separator MUST be ':' (colon).
-parse_name_line() {
-    local line="$1"
-    local key val
-    if [[ "${line}" == *":"* ]]; then
-        key="${line%%:*}"
-        val="${line#*:}"
-    else
-        # Legacy broken '=' format (key=name / key==name)
-        key="${line%=*}"
-        val="${line##*=}"
-    fi
-    key="${key#"${key%%[![:space:]]*}"}"
-    key="${key%"${key##*[![:space:]]}"}"
-    val="${val#"${val%%[![:space:]]*}"}"
-    val="${val%"${val##*[![:space:]]}"}"
-    # recover from old bug: value stored as ":name"
-    if [[ "${val}" == :* ]]; then
-        val="${val:1}"
-    fi
-    printf '%s\t%s\n' "${key}" "${val}"
-}
-
-is_auto_unknown() {
-    [[ "$1" == "${UNKNOWN_LABEL}" || "$1" == "${UNKNOWN_LABEL}-"* ]]
-}
-
-load_names() {
-    declare -gA PEER_NAMES=()
-    [[ -f "${NAMES}" ]] || return 0
-    while IFS= read -r line || [[ -n "${line}" ]]; do
-        line="${line%%#*}"
-        line="${line#"${line%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}"
-        [[ -z "${line}" ]] && continue
-        [[ "${line}" != *"="* && "${line}" != *":"* ]] && continue
-        local key val
-        IFS=$'\t' read -r key val < <(parse_name_line "${line}")
-        [[ -z "${key}" || -z "${val}" ]] && continue
-        if [[ -z "${PEER_NAMES[${key}]:-}" ]]; then
-            PEER_NAMES["${key}"]="${val}"
-        elif is_auto_unknown "${PEER_NAMES[${key}]}" && ! is_auto_unknown "${val}"; then
-            PEER_NAMES["${key}"]="${val}"
-        fi
-    done <"${NAMES}"
-}
-
-# Rewrite names.map to canonical "key:name", drop duplicates/junk
-repair_names_map() {
-    [[ -f "${NAMES}" ]] || return 0
-    (( ${#PEER_NAMES[@]} == 0 )) && return 0
-
-    local tmp key need=0 line
-    while IFS= read -r line || [[ -n "${line}" ]]; do
-        line="${line%%#*}"
-        line="${line#"${line%%[![:space:]]*}"}"
-        [[ -z "${line}" ]] && continue
-        # Any legacy '='-only line or duplicate spam → rewrite
-        if [[ "${line}" != *":"* ]]; then
-            need=1
-            break
-        fi
-    done <"${NAMES}"
-
-    local total
-    total="$(grep -cve '^[[:space:]]*$' "${NAMES}" || true)"
-    if (( total > ${#PEER_NAMES[@]} )); then
-        need=1
-    fi
-
-    # Also rewrite if any stored key would not round-trip as key:name
-    if (( need == 0 )); then
-        while IFS= read -r line || [[ -n "${line}" ]]; do
-            line="${line%%#*}"
-            line="${line#"${line%%[![:space:]]*}"}"
-            [[ -z "${line}" ]] && continue
-            local k v
-            IFS=$'\t' read -r k v < <(parse_name_line "${line}")
-            if [[ "${line}" != "${k}:${v}" ]]; then
-                need=1
-                break
-            fi
-        done <"${NAMES}"
-    fi
-
-    (( need == 0 )) && return 0
-
-    tmp="$(mktemp)"
-    {
-        for key in "${!PEER_NAMES[@]}"; do
-            printf '%s:%s\n' "${key}" "${PEER_NAMES[${key}]}"
-        done
-    } | LC_ALL=C sort >"${tmp}"
-    mv "${tmp}" "${NAMES}"
-    touch "${CHANGED}"
-    log "names.map: repaired to key:name (${total:-?} lines → ${#PEER_NAMES[@]} peers)"
+    return 0
 }
 
 peer_name() {
     local peer="$1"
-    if [[ -n "${PEER_NAMES[${peer}]:-}" ]]; then
-        echo "${PEER_NAMES[${peer}]}"
-    else
-        echo ""
-    fi
-}
-
-# Load Amnezia's own clientId -> clientName table once per collector cycle.
-load_amnezia_names() {
-    [[ "${AUTO_DISCOVER_NAMES}" == "1" ]] || return 1
-    if [[ "${AMNEZIA_NAMES_LOADED:-0}" == "1" ]]; then
-        return 0
-    fi
-
-    declare -gA AMNEZIA_NAMES=()
-    AMNEZIA_NAMES_LOADED=1
-
-    local raw parsed key val
-    if ! raw="$(docker exec "${CONTAINER}" cat "${AMNEZIA_CLIENTS_TABLE}" 2>/dev/null)"; then
-        log "names.map: cannot read Amnezia clientsTable: ${AMNEZIA_CLIENTS_TABLE}"
-        return 1
-    fi
-    if ! parsed="$(printf '%s' "${raw}" | python3 "${SCRIPT_DIR}/amnezia_names.py" 2>/dev/null)"; then
-        log "names.map: cannot parse Amnezia clientsTable"
-        return 1
-    fi
-
-    while IFS=$'\t' read -r key val; do
-        [[ -n "${key}" && -n "${val}" ]] || continue
-        AMNEZIA_NAMES["${key}"]="${val}"
-    done <<<"${parsed}"
-    return 0
-}
-
-# For a peer absent from names.map, import Amnezia's clientName. Existing map
-# entries are never overwritten, so names.map also remains a manual override.
-discover_peer_name() {
-    local peer="$1"
-    local existing name tmp names_dir
-
-    existing="$(peer_name "${peer}")"
-    if [[ -n "${existing}" ]]; then
-        echo "${existing}"
-        return 0
-    fi
-
-    if ! load_amnezia_names; then
-        echo ""
-        return 0
-    fi
-    name="${AMNEZIA_NAMES[${peer}]:-}"
-    if [[ -z "${name}" ]]; then
-        echo ""
-        return 0
-    fi
-
-    names_dir="$(dirname "${NAMES}")"
-    mkdir -p "${names_dir}"
-    tmp="$(mktemp "${names_dir}/.names.map.XXXXXX")"
-    if [[ -f "${NAMES}" ]]; then
-        cat "${NAMES}" >"${tmp}"
-    fi
-    printf '%s:%s\n' "${peer}" "${name}" >>"${tmp}"
-    chmod 0644 "${tmp}"
-    mv "${tmp}" "${NAMES}"
-
-    PEER_NAMES["${peer}"]="${name}"
-    touch "${CHANGED}"
-    log "names.map: imported ${peer} → ${name} from Amnezia clientsTable"
-    echo "${name}"
+    printf '%s' "${AMNEZIA_NAMES[${peer}]:-}"
 }
 
 init_history() {
@@ -261,13 +109,13 @@ calc_delta() {
     if (( current >= last )); then
         echo $((current - last))
     else
-        # Counter reset after container restart
+        # Counter reset after container/interface restart.
         echo "${current}"
     fi
 }
 
 write_lastdb() {
-    local tmp
+    local tmp peer
     tmp="$(mktemp)"
     {
         echo "peer;rx;tx;ts"
@@ -295,11 +143,11 @@ get_dump() {
         || die "cannot read wg dump from container ${CONTAINER}"
 }
 
-load_names
-repair_names_map
-mark_names_changed
 init_history
 read_lastdb
+
+declare -A AMNEZIA_NAMES=()
+load_amnezia_names || true
 
 NOW="$(date +%s)"
 DATE="$(date '+%Y-%m-%d')"
@@ -312,8 +160,6 @@ declare -A CURRENT_HS=()
 declare -A CURRENT_DRX=()
 declare -A CURRENT_DTX=()
 declare -A CURRENT_INTERVAL=()
-declare -A AMNEZIA_NAMES=()
-AMNEZIA_NAMES_LOADED=0
 
 mapfile -t DUMP_LINES < <(get_dump)
 (( ${#DUMP_LINES[@]} > 0 )) || die "empty wg dump"
@@ -336,12 +182,6 @@ while IFS=$'\t' read -r peer _psk _endpoint allowed_ips handshake rx tx _keepali
     CURRENT_DTX["${peer}"]=0
     CURRENT_INTERVAL["${peer}"]=0
 
-    # A new peer is named immediately on first observation. clientsTable is
-    # fetched lazily and at most once per collector cycle.
-    if [[ -z "${PEER_NAMES[${peer}]:-}" ]]; then
-        discover_peer_name "${peer}" >/dev/null || true
-    fi
-
     if [[ -z "${LAST_RX[${peer}]:-}" ]]; then
         continue
     fi
@@ -359,6 +199,7 @@ while IFS=$'\t' read -r peer _psk _endpoint allowed_ips handshake rx tx _keepali
     fi
 
     name="$(peer_name "${peer}")"
+    name="${name//;/,}"
     printf '%s;%s;%s;%s;%s;%s;%s;%s;%s;%s\n' \
         "${NOW}" "${DATE}" "${TIME}" "${peer}" "${name}" \
         "${allowed_ips:-}" "${drx}" "${dtx}" "${interval}" "${handshake}" >>"${tmp_history}"
