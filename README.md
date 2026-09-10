@@ -28,7 +28,7 @@ AWGStat traffic sampling intervals, not TCP connections.
 
 ## Version
 
-See [`VERSION`](VERSION). Current: **2.3.1**
+See [`VERSION`](VERSION). Current: **2.3.2**
 
 ## Requirements
 
@@ -40,10 +40,18 @@ See [`VERSION`](VERSION). Current: **2.3.1**
 ## Install / upgrade
 
 ```bash
-curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.1/awgstat-2.3.1.tar.gz
-tar -xzf awgstat-2.3.1.tar.gz
-cd awgstat-2.3.1
+curl -fsSL -O https://github.com/arma35/awgstat/releases/download/v2.3.2/awgstat-2.3.2.tar.gz
+tar -xzf awgstat-2.3.2.tar.gz
+cd awgstat-2.3.2
 sudo bash install.sh
+```
+
+Starting with **2.3.2**, `install.sh` also installs the updater itself as
+`/opt/wgstats/update.sh`. Older installations that do not have this file need
+the one-time archive/bootstrap installation above. Later upgrades can use:
+
+```bash
+sudo /opt/wgstats/update.sh <version>
 ```
 
 Cron lives in **`/etc/cron.d/awgstat`** (system), not in `crontab -l`. Check with `cat /etc/cron.d/awgstat`.
@@ -196,6 +204,7 @@ reportgen.py         # SARG-style report implementation
 amnezia_names.py     # parse Amnezia clientsTable for automatic peer names
 online.js            # interactive ONLINE graph period selector
 backup.sh            # data backup
+update.sh            # release updater (installed to /opt/wgstats since 2.3.2)
 config               # settings
 style.css            # report CSS
 names.map            # peer → name cache/override (local, not in release)

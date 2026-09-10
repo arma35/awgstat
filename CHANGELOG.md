@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.2] — 2026-09-10
+
+### Fixed
+- `install.sh` now installs `update.sh` into `/opt/wgstats/update.sh`, so future
+  release upgrades can be launched directly from the installed application.
+- `update.sh` is included in CRLF normalization during installation.
+
+### Changed
+- README now documents the one-time bootstrap upgrade path for installations
+  created before the updater was copied into `/opt/wgstats`.
+
 ## [2.3.1] — 2026-09-09
 
 ### Added
