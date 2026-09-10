@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.0] — 2026-09-10
+
+### Changed
+- `names.map` is no longer used as the source of client names.
+- Current names are read directly from Amnezia `/opt/amnezia/awg/clientsTable`
+  using `clientId -> userData.clientName` on every collection/report cycle.
+- The current Amnezia name overrides historical labels for the same public key;
+  after revocation, reports fall back to the last non-empty name stored in
+  `history.csv` without deleting traffic history.
+- `NAMES` and `AUTO_DISCOVER_NAMES` were removed from the active configuration.
+  Existing legacy `names.map` files are left untouched but ignored.
+- Backups no longer include `names.map`; `history.csv` already preserves the
+  last-known name for retired peers.
+
+### Added
+- A small internal fingerprint of current `clientId -> clientName` pairs so
+  add/rename/revoke events trigger a full HTML rebuild even when no traffic was
+  transferred at that moment.
+
 ## [2.3.4] — 2026-09-10
 
 ### Added
